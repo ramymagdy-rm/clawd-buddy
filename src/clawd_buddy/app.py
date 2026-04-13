@@ -33,6 +33,7 @@ import ctypes
 import argparse
 import shutil
 
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 import pygame
 
 # ── Platform: Windows transparency & positioning ──────────────────────
@@ -111,7 +112,7 @@ def _get_screen_size():
 # ── Dimensions ────────────────────────────────────────────────────────
 WIN_W, WIN_H = 200, 260  # window size (room for confetti above)
 CHAR_W, CHAR_H = 80, 62  # the body rectangle
-FPS = 60
+FPS = 120
 
 # Transparent key — never draw with this exact color
 TKEY = (1, 1, 1)
@@ -143,7 +144,7 @@ class BuddyState:
     def __init__(self):
         self.mode = "idle"
         self.mode_start = 0.0
-        self.cel_dur = 3.5
+        self.cel_dur = 5.0
         self.wave_dur = 5.0
         self.confetti = []
         self.should_quit = False
@@ -484,6 +485,8 @@ def parse_args():
                    help="Enable run at Windows startup and exit")
     p.add_argument("--no-startup", action="store_true",
                    help="Disable run at Windows startup and exit")
+    p.add_argument("--fg", action="store_true",
+                   help="Run in foreground (default auto-detaches)")
     return p.parse_args()
 
 
@@ -513,6 +516,31 @@ def main():
         except ConnectionRefusedError:
             print(f"[buddy] No buddy on port {port}")
             sys.exit(1)
+        sys.exit(0)
+
+    # Auto-detach: spawn via pythonw (no console at all) and exit
+    if not args.fg and sys.platform == "win32":
+        import subprocess
+        # Use pythonw.exe from the same env as current python — no console window
+        py_dir = os.path.dirname(sys.executable)
+        pythonw = os.path.join(py_dir, "pythonw.exe")
+        if not os.path.exists(pythonw):
+            # Some envs put it in Scripts/
+            pythonw = os.path.join(py_dir, "Scripts", "pythonw.exe")
+        if not os.path.exists(pythonw):
+            pythonw = sys.executable  # fallback
+        cmd = [pythonw, "-m", "clawd_buddy.app", "--fg"]
+        if args.port != SOCK_PORT:
+            cmd += ["--port", str(args.port)]
+        if args.no_topmost:
+            cmd.append("--no-topmost")
+        if args.test:
+            cmd.append("--test")
+        subprocess.Popen(
+            cmd,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+            close_fds=True,
+        )
         sys.exit(0)
 
     # Single instance lock

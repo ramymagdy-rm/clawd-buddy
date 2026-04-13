@@ -2,8 +2,8 @@
 
 A tiny animated terminal pet that sits on your Windows taskbar and reacts to [Claude Code](https://claude.ai/code) events.
 
-<!-- TODO: add a gif/screenshot here -->
-<!-- ![Clawd Buddy demo](docs/demo.gif) -->
+<!-- ![Clawd Buddy](assets/buddy-image.png) -->
+![Clawd Buddy](assets/buddy-gif.gif)
 
 ## What it does
 
@@ -187,7 +187,7 @@ This script starts the buddy with a hidden console window. To remove it, run `cl
 ### Idle
 
 - Gentle vertical bobbing (sine wave)
-- Periodic blinking (every ~3.5 seconds)
+- Periodic blinking (every ~5 seconds)
 - Pupils wander slowly
 - Small mouth line with subtle movement
 - Arms sway gently at sides
