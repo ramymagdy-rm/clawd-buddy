@@ -1,6 +1,6 @@
 # Clawd Buddy
 
-A tiny animated terminal pet that sits on your Windows taskbar and reacts to [Claude Code](https://claude.ai/code) events.
+A tiny animated terminal pet that sits on your taskbar and reacts to [Claude Code](https://claude.ai/code) events. Works on **Windows** and **Linux**.
 
 <!-- ![Clawd Buddy](assets/buddy-image.png) -->
 ![Clawd Buddy](assets/buddy-gif.gif)
@@ -14,6 +14,26 @@ Clawd Buddy is a small always-on-top character that lives on your taskbar while 
 | **Idle** | Gently bobs, blinks, breathes — your quiet companion |
 | **Assistant finishes** (`Stop` hook) | Celebrates with confetti, happy eyes, and waving arms |
 | **Assistant needs permission** (`PermissionRequest` hook) | Waves at you with a floating **!** so you know to check back |
+
+### Themes
+
+Clawd Buddy supports **dark** and **light** color themes:
+
+```bash
+clawd-buddy --theme dark    # default
+clawd-buddy --theme light   # light body, light screen
+```
+
+You can also toggle the theme at any time from the system tray icon menu.
+
+## Platform support
+
+| Platform | Transparency | Always-on-top | Autostart |
+| --- | --- | --- | --- |
+| **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | VBS in Startup folder |
+| **Linux (X11)** | Themed background (dark or light) | `_NET_WM_STATE_ABOVE` | `.desktop` in `~/.config/autostart/` |
+
+> **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px.
 
 ## Install
 
@@ -49,14 +69,15 @@ The buddy appears on your taskbar, centered at the bottom of the screen. It runs
 ### 2. Run at startup (optional)
 
 ```bash
-# Enable — buddy starts automatically when you log into Windows
+# Enable — buddy starts automatically at login
 clawd-buddy --startup
 
 # Disable — remove from startup
 clawd-buddy --no-startup
 ```
 
-This places a lightweight launcher in your Windows Startup folder (`shell:startup`). No console window appears — the buddy runs silently in the background.
+- **Windows**: Places a VBS launcher in `shell:startup`. No console window appears.
+- **Linux**: Creates a `.desktop` file in `~/.config/autostart/`.
 
 ### 3. Wire up Claude Code hooks
 
@@ -104,10 +125,12 @@ clawd-buddy                  Start buddy on taskbar
 clawd-buddy --test           Start with a celebration animation
 clawd-buddy --send MSG       Signal a running buddy to celebrate
 clawd-buddy --wave           Signal a running buddy to wave (needs attention)
-clawd-buddy --startup        Enable run at Windows startup
-clawd-buddy --no-startup     Disable run at Windows startup
+clawd-buddy --theme THEME    Color theme: dark (default) or light
+clawd-buddy --startup        Enable run at login/startup
+clawd-buddy --no-startup     Disable run at login/startup
 clawd-buddy --port PORT      Use a custom TCP port (default: 44556)
 clawd-buddy --no-topmost     Don't keep the window always-on-top
+clawd-buddy --fg             Run in foreground (skip auto-detach)
 clawd-buddy --help           Show help
 ```
 
@@ -117,6 +140,10 @@ clawd-buddy --help           Show help
 | --- | --- |
 | **Drag** | Click anywhere on the buddy and drag to reposition |
 | **Space** | Trigger a test celebration |
+| **Ctrl+1** | Scale to 100% (default) |
+| **Ctrl+2** | Scale to 125% |
+| **Ctrl+3** | Scale to 150% |
+| **Ctrl+4** | Scale to 200% |
 | **Escape** | Quit the buddy |
 | **Tray icon** | Right-click the system tray icon for a menu |
 
@@ -172,15 +199,12 @@ The buddy adds a system tray icon with a right-click menu:
 - **Test Celebration** — trigger the celebrate animation
 - **Quit** — close the buddy
 
-### Windows startup
+### Autostart
 
-`clawd-buddy --startup` places a small VBS launcher in your Windows Startup folder:
+`clawd-buddy --startup` registers the buddy to launch at login. `clawd-buddy --no-startup` removes it.
 
-```text
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\clawd-buddy-startup.vbs
-```
-
-This script starts the buddy with a hidden console window. To remove it, run `clawd-buddy --no-startup` or delete the file manually.
+- **Windows**: Places a VBS launcher in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`. Starts with a hidden console window.
+- **Linux**: Creates a `.desktop` file in `~/.config/autostart/`. Uses the XDG autostart standard supported by GNOME, KDE, XFCE, and others.
 
 ## Animations
 
@@ -237,25 +261,38 @@ clawd-buddy --no-topmost
 
 ### Buddy doesn't appear
 
-- **Windows only**: Clawd Buddy uses Windows-specific APIs (`user32`, `shell32`) for transparency and taskbar detection. It does not work on macOS or Linux.
-- Make sure no other process is using port `44556`: `netstat -ano | findstr 44556`
+- **Windows**: Make sure no other process is using port `44556`: `netstat -ano | findstr 44556`
+- **Linux**: Requires an X11 session. If you're on Wayland, the buddy forces `SDL_VIDEODRIVER=x11` via XWayland. If it still doesn't appear, try `clawd-buddy --fg` to see errors in the terminal.
+- **macOS**: Not yet supported.
 
 ### Hook doesn't trigger the buddy
 
 - Make sure the buddy is running (`clawd-buddy` in a terminal or via `--startup`).
 - Test manually: `clawd-buddy --send test` — if this says "No buddy on port 44556", the buddy isn't running.
-- Check that `clawd-buddy` is on your PATH: `where clawd-buddy`
+- Check that `clawd-buddy` is on your PATH: `where clawd-buddy` (Windows) / `which clawd-buddy` (Linux)
 
 ### Multiple buddies / port conflict
 
 - The buddy uses a lock socket on port `44557` (main port + 1) to prevent duplicates.
-- If a stale lock is stuck, kill the process and restart: `taskkill /F /IM clawd-buddy.exe`
+- **Windows**: `taskkill /F /IM clawd-buddy.exe`
+- **Linux**: `pkill -f clawd-buddy`
 
 ### Startup not working
 
+**Windows:**
+
 - Verify the VBS file exists: `dir "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\clawd-buddy*"`
 - Re-run `clawd-buddy --startup` to regenerate it.
-- Make sure `clawd-buddy.exe` is on your PATH: `where clawd-buddy`
+
+**Linux:**
+
+- Verify the desktop file exists: `ls ~/.config/autostart/clawd-buddy.desktop`
+- Re-run `clawd-buddy --startup` to regenerate it.
+- Make sure `clawd-buddy` is on your PATH: `which clawd-buddy`
+
+### Linux: window has a visible background
+
+On Linux, color-key transparency is not available. The buddy renders on a themed background (dark or light). Use `--theme light` on light panels/docks, or `--theme dark` on dark ones to blend in.
 
 ## Disclaimer
 
