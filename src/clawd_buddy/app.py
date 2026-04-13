@@ -506,13 +506,25 @@ def disable_startup():
 
 
 def resize_window(handle, scale, topmost):
-    """Resize the pygame window and re-apply platform setup."""
+    """Resize the pygame window, re-apply platform setup, and clamp to screen."""
     new_w = int(WIN_W * scale)
     new_h = int(WIN_H * scale)
+    # Get current position before recreating the surface
+    wx, wy, _, _ = get_window_rect(handle)
     screen = pygame.display.set_mode((new_w, new_h), pygame.NOFRAME)
-    # Re-acquire handle (may change after set_mode on some platforms)
     handle = get_window_handle()
     setup_window(handle, topmost)
+    # Clamp so the window stays fully on screen
+    if sys.platform == "win32":
+        scr_w, scr_h = _win_get_screen_size()
+    elif sys.platform == "linux":
+        info = pygame.display.Info()
+        scr_w, scr_h = info.current_w, info.current_h
+    else:
+        scr_w, scr_h = 1920, 1080
+    nx = max(0, min(wx, scr_w - new_w))
+    ny = max(0, min(wy, scr_h - new_h))
+    move_window(handle, nx, ny)
     return screen, handle
 
 
