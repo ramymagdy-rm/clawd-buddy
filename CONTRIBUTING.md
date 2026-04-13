@@ -2,11 +2,44 @@
 
 Thanks for your interest in contributing!
 
+## Branching strategy
+
+```text
+main          Stable releases only — merged from develop
+ └─ develop   Integration branch — features merge here first
+     └─ feature/xyz   Individual feature branches
+```
+
+- **`main`** — production-ready releases. Only updated via merge from `develop` after a group of features is tested.
+- **`develop`** — active development. All feature branches are created from and merged back into `develop`.
+- **`feature/*`** — short-lived branches for individual features or fixes, branched off `develop`.
+
+### Workflow
+
+1. Create a feature branch from `develop`:
+
+   ```bash
+   git checkout develop
+   git pull origin develop
+   git checkout -b feature/my-feature
+   ```
+
+2. Make your changes, commit, and push:
+
+   ```bash
+   git push -u origin feature/my-feature
+   ```
+
+3. Open a pull request targeting **`develop`** (not `main`).
+4. After review, merge into `develop`.
+5. When a set of features in `develop` is ready for release, `develop` is merged into `main` and tagged.
+
 ## Development setup
 
 ```bash
 git clone https://github.com/ramymagdy-rm/clawd-buddy.git
 cd clawd-buddy
+git checkout develop
 
 # Create a venv and install in editable mode
 uv venv
@@ -22,11 +55,13 @@ pip install -e .
 
 ```bash
 # Run from source
-python -m clawd_buddy.app
+python -m clawd_buddy.app --fg
 
 # Or if installed in editable mode
-clawd-buddy
+clawd-buddy --fg
 ```
+
+Use `--fg` to keep the buddy in the foreground so you can see log output in the terminal.
 
 ## Project structure
 
@@ -50,21 +85,24 @@ clawd-buddy/
 
 Everything lives in `app.py` to keep the package simple:
 
-- **Win32 helpers** — `ctypes` calls for transparency, positioning, taskbar detection
-- **State machine** — `BuddyState` with three modes: `idle`, `celebrating`, `waving`
-- **Drawing** — `draw_buddy()` renders the character based on current state and time
+- **Platform helpers** — Windows (`ctypes` win32) and Linux (`ctypes` X11) for transparency, positioning, panel detection
+- **Themes** — `THEMES` dict with `dark` and `light` color palettes
+- **Cross-platform wrappers** — `get_window_handle()`, `setup_window()`, `move_window()`, etc. dispatch to the right platform
+- **State machine** — `BuddyState` with three modes (`idle`, `celebrating`, `waving`), theme, and scale
+- **Drawing** — `draw_buddy()` renders the character on a base surface; the main loop scales it to the window
 - **Socket listener** — TCP server on port 44556, parses JSON `{"action": "..."}` messages
-- **System tray** — `pystray` icon with context menu
-- **CLI** — `argparse` for `--send`, `--wave`, `--test`, `--startup`, etc.
-- **Main loop** — pygame event loop at 60 FPS
+- **System tray** — `pystray` icon with context menu (celebrate, theme toggle, quit)
+- **CLI** — `argparse` for `--send`, `--wave`, `--test`, `--theme`, `--startup`, etc.
+- **Main loop** — pygame event loop at 120 FPS
 
 ## Making changes
 
-1. Fork the repo and create a feature branch
+1. Fork the repo and create a feature branch off `develop`
 2. Make your changes in `src/clawd_buddy/app.py`
 3. Test manually: `clawd-buddy --test` (celebrate), `clawd-buddy --wave` (wave signal)
-4. Update `CHANGELOG.md` under an `[Unreleased]` section
-5. Open a pull request
+4. Test both themes: `clawd-buddy --theme dark`, `clawd-buddy --theme light`
+5. Update `CHANGELOG.md` under an `[Unreleased]` section
+6. Open a pull request targeting `develop`
 
 ## Adding a new animation state
 
@@ -78,5 +116,5 @@ Everything lives in `app.py` to keep the package simple:
 
 - Keep everything in `app.py` unless there's a strong reason to split
 - No external assets — all rendering is procedural (pygame draw calls)
-- Windows-only is fine for now; cross-platform support would need platform abstraction for the win32 calls
 - Test all three states (idle, celebrate, wave) after any drawing changes
+- All PRs target `develop`, not `main`
