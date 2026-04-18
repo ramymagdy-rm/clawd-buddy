@@ -12,6 +12,7 @@ Options:
   --test           Trigger a test celebration on startup
   --send MESSAGE   Signal a running buddy (celebrate) and exit
   --wave           Signal buddy to wave (attention needed) and exit
+  --top            Signal running buddy to re-assert always-on-top and exit
   --theme THEME    Color theme: dark or light (default: dark)
   --help           Show this help and exit
 
@@ -103,8 +104,37 @@ if sys.platform == "win32":
     LWA_COLORKEY     = 0x00000001
     SWP_NOMOVE       = 0x0002
     SWP_NOSIZE       = 0x0001
+    SWP_NOACTIVATE   = 0x0010
+    SWP_SHOWWINDOW   = 0x0040
     HWND_TOPMOST     = -1
     HWND_NOTOPMOST   = -2
+    SW_SHOWNOACTIVATE = 4
+
+    # Explicit argtypes — without these, ctypes defaults to c_int (32-bit),
+    # which truncates HWND_TOPMOST/HWND_NOTOPMOST on 64-bit Windows.
+    user32.SetWindowPos.argtypes = [
+        ctypes.wintypes.HWND, ctypes.wintypes.HWND,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ctypes.c_uint,
+    ]
+    user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+    user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = ctypes.wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]
+    user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
+    user32.BringWindowToTop.argtypes = [ctypes.wintypes.HWND]
+    user32.BringWindowToTop.restype = ctypes.wintypes.BOOL
+    user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [
+        ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+    user32.AttachThreadInput.argtypes = [
+        ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.BOOL,
+    ]
+    user32.AttachThreadInput.restype = ctypes.wintypes.BOOL
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetCurrentThreadId.restype = ctypes.wintypes.DWORD
 
     class APPBARDATA(ctypes.Structure):
         _fields_ = [
@@ -132,6 +162,37 @@ if sys.platform == "win32":
     def _win_set_topmost(hwnd, topmost=True):
         flag = HWND_TOPMOST if topmost else HWND_NOTOPMOST
         user32.SetWindowPos(hwnd, flag, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+
+    def _win_raise_topmost(hwnd):
+        """Force the window above other topmost peers without stealing focus.
+
+        SetWindowPos(HWND_TOPMOST) on an already-topmost window does NOT
+        re-insert at the top of the z-order group — peers added after us
+        sit above us. The reliable sequence is: drop to NOTOPMOST, re-assert
+        TOPMOST (puts us at top of topmost group), then BringWindowToTop
+        within the topmost z-group. AttachThreadInput briefly attaches to
+        the foreground thread so BringWindowToTop is honored.
+        """
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+        user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+
+        r1 = user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        r2 = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                 flags | SWP_SHOWWINDOW)
+
+        # AttachThreadInput trick: BringWindowToTop is otherwise ignored when
+        # the calling thread doesn't own the foreground window.
+        fg = user32.GetForegroundWindow()
+        my_tid = kernel32.GetCurrentThreadId()
+        fg_tid = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = False
+        if fg_tid and fg_tid != my_tid:
+            attached = bool(user32.AttachThreadInput(my_tid, fg_tid, True))
+        r3 = user32.BringWindowToTop(hwnd)
+        if attached:
+            user32.AttachThreadInput(my_tid, fg_tid, False)
+
+        print(f"[buddy] raise: NOTOPMOST={r1} TOPMOST={r2} BringToTop={r3}")
 
     def _win_get_window_rect(hwnd):
         rect = ctypes.wintypes.RECT()
@@ -471,6 +532,32 @@ def move_window(handle, x, y):
         _linux_move_window(handle, x, y)
 
 
+def raise_window(handle):
+    """Force the window above other topmost peers, snapping it back on-screen
+    if it has drifted off (e.g. monitor disconnected, dragged out of bounds).
+    """
+    # Snap back on-screen if the window is outside the primary screen area.
+    wx, wy, ww, wh = get_window_rect(handle)
+    if sys.platform == "win32":
+        scr_w, scr_h = _win_get_screen_size()
+    elif sys.platform == "linux":
+        info = pygame.display.Info()
+        scr_w, scr_h = info.current_w, info.current_h
+    else:
+        scr_w, scr_h = 1920, 1080
+    off_screen = (wx + ww <= 0 or wy + wh <= 0
+                  or wx >= scr_w or wy >= scr_h)
+    if off_screen:
+        nx, ny = get_initial_position()
+        move_window(handle, nx, ny)
+
+    if sys.platform == "win32":
+        _win_raise_topmost(handle)
+    elif sys.platform == "linux":
+        # Re-sending _NET_WM_STATE_ABOVE raises above other ABOVE windows
+        _linux_setup_window(handle, topmost=True)
+
+
 def get_initial_position():
     """Return (win_x, win_y) for the buddy window."""
     if sys.platform == "win32":
@@ -553,6 +640,7 @@ class BuddyState:
         self.theme = dict(THEMES[theme_name])
         self.scale = 1.0
         self._scale_changed = False
+        self._raise_requested = False
 
     @property
     def celebrating(self):
@@ -582,6 +670,9 @@ class BuddyState:
         if self.mode != "celebrating":
             self.mode = "waving"
             self.mode_start = time.time()
+
+    def bring_to_front(self):
+        self._raise_requested = True
 
     def update(self):
         elapsed = time.time() - self.mode_start
@@ -782,6 +873,8 @@ def socket_listener(state, port):
                 print(f"[buddy] Signal: {action}")
                 if action == "wave":
                     state.wave()
+                elif action == "raise":
+                    state.bring_to_front()
                 else:
                     state.trigger()
         except socket.timeout:
@@ -808,6 +901,9 @@ def create_tray(state):
     def on_celebrate(_icon, _item):
         state.trigger()
 
+    def on_bring_to_front(_icon, _item):
+        state.bring_to_front()
+
     def on_theme_dark(_icon, _item):
         state.set_theme("dark")
 
@@ -820,6 +916,7 @@ def create_tray(state):
 
     menu = pystray.Menu(
         pystray.MenuItem("Test Celebration", on_celebrate),
+        pystray.MenuItem("Bring to Front", on_bring_to_front),
         pystray.MenuItem("Theme", pystray.Menu(
             pystray.MenuItem(
                 "Dark", on_theme_dark,
@@ -845,6 +942,7 @@ def parse_args():
             "  clawd-buddy --test         Start with a celebration\n"
             "  clawd-buddy --send Done!   Signal a running buddy\n"
             "  clawd-buddy --wave         Wave for attention\n"
+            "  clawd-buddy --top          Bring buddy to front (re-assert topmost)\n"
             "  clawd-buddy --theme light  Use light theme\n"
             "  clawd-buddy --startup      Run at login/startup\n"
             "  clawd-buddy --no-startup   Remove from login/startup\n"
@@ -860,6 +958,8 @@ def parse_args():
                    help="Send celebrate signal to running buddy and exit")
     p.add_argument("--wave", action="store_true",
                    help="Send wave/attention signal to running buddy and exit")
+    p.add_argument("--top", action="store_true",
+                   help="Tell running buddy to re-assert always-on-top and exit")
     p.add_argument("--theme", choices=["dark", "light"], default="dark",
                    help="Color theme (default: dark)")
     p.add_argument("--startup", action="store_true",
@@ -884,9 +984,14 @@ def main():
         disable_startup()
         sys.exit(0)
 
-    # --send / --wave (signal a running instance)
-    if args.send is not None or args.wave:
-        action = "wave" if args.wave else "celebrate"
+    # --send / --wave / --top (signal a running instance)
+    if args.send is not None or args.wave or args.top:
+        if args.top:
+            action = "raise"
+        elif args.wave:
+            action = "wave"
+        else:
+            action = "celebrate"
         payload = json.dumps({"action": action}).encode()
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -990,6 +1095,12 @@ def main():
         if state._scale_changed:
             state._scale_changed = False
             screen, handle = resize_window(handle, state.scale, topmost)
+
+        # Apply pending bring-to-front request
+        if state._raise_requested:
+            state._raise_requested = False
+            topmost = True
+            raise_window(handle)
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
