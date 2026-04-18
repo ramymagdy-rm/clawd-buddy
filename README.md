@@ -56,6 +56,19 @@ cd clawd-buddy
 uv tool install --from . clawd-buddy
 ```
 
+### Update
+
+```bash
+# With uv
+uv tool install --upgrade clawd-buddy
+
+# With pipx
+pipx upgrade clawd-buddy
+
+# With pip
+pip install --upgrade clawd-buddy
+```
+
 ## Quick start
 
 ### 1. Launch the buddy

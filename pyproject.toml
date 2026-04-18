@@ -1,6 +1,6 @@
 [project]
 name = "clawd-buddy"
-version = "0.1.3"
+version = "0.1.5"
 description = "Animated terminal pet that sits on your taskbar and reacts to AI coding assistant events"
 readme = "README.md"
 license = "MIT"
