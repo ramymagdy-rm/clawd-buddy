@@ -112,6 +112,16 @@ Everything lives in `app.py` to keep the package simple:
 4. Add a CLI flag in `parse_args()` and handle it in `main()`
 5. Document the new hook in `README.md`
 
+## Releasing
+
+When `develop` has been merged into `main` and tagged, publish to PyPI with:
+
+```bash
+rm -r dist; uv build && uv publish
+```
+
+`uv build` produces the wheel and sdist in `dist/`; `uv publish` uploads both to PyPI. Make sure your `UV_PUBLISH_TOKEN` (or `~/.pypirc`) is configured.
+
 ## Guidelines
 
 - Keep everything in `app.py` unless there's a strong reason to split
