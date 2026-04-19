@@ -13,7 +13,9 @@ Options:
   --send MESSAGE   Signal a running buddy (celebrate) and exit
   --wave           Signal buddy to wave (attention needed) and exit
   --top            Signal running buddy to re-assert always-on-top and exit
-  --theme THEME    Color theme: dark or light (default: dark)
+  --quit           Ask the running buddy to exit cleanly and exit
+  --theme THEME    Color theme — one of: dark, light, dracula, monokai,
+                   nord, gruvbox, solarized, sunset (default: dark)
   --help           Show this help and exit
 
 Controls:
@@ -21,6 +23,9 @@ Controls:
   Space            Test celebration
   Ctrl+1/2/3/4     Resize: 100% / 125% / 150% / 200%
   Escape           Quit
+
+Switch themes from the system-tray right-click menu (Theme submenu)
+or with the --theme CLI flag at launch.
 """
 
 import sys
@@ -45,6 +50,10 @@ import pygame
 
 
 # ── Themes ────────────────────────────────────────────────────────────
+# Ordered list of themes — this is also the display order in the
+# system-tray "Theme" submenu.
+# `bg_fill` is the Linux window background (no color-key transparency on X11);
+# on Windows the color-key TKEY is used regardless of the theme.
 THEMES = {
     "dark": {
         "body_outer":  (35, 35, 48),
@@ -58,6 +67,7 @@ THEMES = {
         "limb":        (35, 35, 48),
         "shoe":        (50, 50, 68),
         "wave_eye":    (255, 190, 80),
+        "bg_fill":     (1, 1, 1),
     },
     "light": {
         "body_outer":  (195, 200, 215),
@@ -71,8 +81,101 @@ THEMES = {
         "limb":        (175, 180, 200),
         "shoe":        (155, 160, 180),
         "wave_eye":    (230, 150, 30),
+        "bg_fill":     (250, 250, 255),
+    },
+    "dracula": {
+        # Deep magenta-purple — red-leaning to stand apart from nord
+        "body_outer":  (95, 40, 140),
+        "body_inner":  (120, 65, 170),
+        "title_bar":   (170, 100, 220),
+        "screen_bg":   (50, 20, 80),
+        "eye_white":   (248, 248, 242),
+        "pupil":       (50, 20, 80),
+        "mouth":       (189, 147, 249),
+        "mouth_happy": (255, 121, 198),
+        "limb":        (95, 40, 140),
+        "shoe":        (55, 25, 85),
+        "wave_eye":    (255, 184, 108),
+        "bg_fill":     (50, 20, 80),
+    },
+    "monokai": {
+        # Saturated forest green — clearly not gray-blue
+        "body_outer":  (50, 95, 25),
+        "body_inner":  (75, 125, 40),
+        "title_bar":   (150, 190, 60),
+        "screen_bg":   (30, 50, 18),
+        "eye_white":   (248, 248, 242),
+        "pupil":       (30, 50, 18),
+        "mouth":       (166, 226, 46),
+        "mouth_happy": (253, 151, 31),
+        "limb":        (50, 95, 25),
+        "shoe":        (32, 55, 18),
+        "wave_eye":    (249, 38, 114),
+        "bg_fill":     (30, 50, 18),
+    },
+    "nord": {
+        # Strong steel / frost blue — green-leaning to stand apart from dracula
+        "body_outer":  (30, 95, 165),
+        "body_inner":  (55, 125, 195),
+        "title_bar":   (100, 160, 220),
+        "screen_bg":   (20, 55, 95),
+        "eye_white":   (236, 239, 244),
+        "pupil":       (20, 55, 95),
+        "mouth":       (136, 192, 208),
+        "mouth_happy": (163, 190, 140),
+        "limb":        (30, 95, 165),
+        "shoe":        (20, 55, 95),
+        "wave_eye":    (235, 203, 139),
+        "bg_fill":     (20, 55, 95),
+    },
+    "gruvbox": {
+        # Warm burnt orange — red-dominant to stand apart from monokai's green
+        "body_outer":  (140, 65, 20),
+        "body_inner":  (175, 95, 35),
+        "title_bar":   (235, 145, 40),
+        "screen_bg":   (70, 35, 15),
+        "eye_white":   (235, 219, 178),
+        "pupil":       (70, 35, 15),
+        "mouth":       (184, 187, 38),
+        "mouth_happy": (250, 189, 47),
+        "limb":        (140, 65, 20),
+        "shoe":        (70, 35, 15),
+        "wave_eye":    (254, 128, 25),
+        "bg_fill":     (70, 35, 15),
+    },
+    "solarized": {
+        # Warm beige / cream (clearly a light theme, yellow-tinted)
+        "body_outer":  (220, 200, 140),
+        "body_inner":  (245, 225, 170),
+        "title_bar":   (170, 155, 100),
+        "screen_bg":   (253, 246, 227),
+        "eye_white":   (255, 255, 255),
+        "pupil":       (7, 54, 66),
+        "mouth":       (88, 110, 117),
+        "mouth_happy": (181, 137, 0),
+        "limb":        (170, 155, 100),
+        "shoe":        (130, 115, 70),
+        "wave_eye":    (203, 75, 22),
+        "bg_fill":     (245, 225, 170),
+    },
+    "sunset": {
+        # Vivid coral / peach (clearly warm, not gray)
+        "body_outer":  (255, 130, 100),
+        "body_inner":  (255, 170, 140),
+        "title_bar":   (230, 80, 60),
+        "screen_bg":   (255, 210, 185),
+        "eye_white":   (255, 255, 255),
+        "pupil":       (90, 35, 25),
+        "mouth":       (205, 92, 92),
+        "mouth_happy": (255, 99, 71),
+        "limb":        (230, 80, 60),
+        "shoe":        (180, 60, 40),
+        "wave_eye":    (255, 220, 80),
+        "bg_fill":     (255, 210, 185),
     },
 }
+
+THEME_NAMES = list(THEMES.keys())  # display order for tray menu
 
 CONFETTI_COLORS = [
     (255, 107, 107), (78, 205, 196), (69, 183, 209),
@@ -620,9 +723,8 @@ def get_bg_fill(theme_name):
     if sys.platform == "win32":
         return TKEY  # color-key transparency
     # Linux: no color-key transparency, use themed background
-    if theme_name == "light":
-        return (250, 250, 255)
-    return (1, 1, 1)
+    theme = THEMES.get(theme_name, THEMES["dark"])
+    return theme.get("bg_fill", (1, 1, 1))
 
 
 # ── State ─────────────────────────────────────────────────────────────
@@ -875,6 +977,8 @@ def socket_listener(state, port):
                     state.wave()
                 elif action == "raise":
                     state.bring_to_front()
+                elif action == "quit":
+                    state.should_quit = True
                 else:
                     state.trigger()
         except socket.timeout:
@@ -883,8 +987,106 @@ def socket_listener(state, port):
             print(f"[buddy] Socket error: {e}")
 
 
+# ── Persistent config (remembered theme, etc.) ────────────────────────
+def _config_dir():
+    """Per-OS directory for clawd-buddy's user config."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser(
+            "~\\AppData\\Roaming"
+        )
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+            os.path.expanduser("~"), ".config"
+        )
+    return os.path.join(base, "clawd-buddy")
+
+
+def _config_path():
+    return os.path.join(_config_dir(), "config.json")
+
+
+def load_config():
+    """Read config.json. Returns an empty dict on any error."""
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+def save_config(data):
+    """Atomically write config.json. Non-fatal on failure."""
+    path = _config_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"[buddy] Could not save config: {e}")
+
+
+def load_saved_theme():
+    """Return the last remembered theme name, or None if unknown / invalid."""
+    name = load_config().get("theme")
+    return name if name in THEMES else None
+
+
+def save_theme_pref(name):
+    """Persist the user's theme selection. Called on launch override and
+    whenever the tray Theme submenu changes the active theme."""
+    if name not in THEMES:
+        return
+    cfg = load_config()
+    if cfg.get("theme") == name:
+        return  # no-op write avoided
+    cfg["theme"] = name
+    save_config(cfg)
+
+
 # ── System tray ───────────────────────────────────────────────────────
+def _tray_log_path():
+    """Per-OS scratch path for tray startup errors."""
+    if sys.platform == "win32":
+        base = os.environ.get("TEMP") or os.environ.get("TMP") or "."
+    else:
+        base = "/tmp"
+    return os.path.join(base, "clawd-buddy-tray.log")
+
+
 def create_tray(state):
+    """Entry point for the tray daemon thread — swallow no exceptions silently.
+
+    The tray is a daemon thread; an uncaught exception here used to kill the
+    tray icon without any visible feedback (pythonw on Windows has no stderr).
+    Log to a file so startup failures are diagnosable.
+    """
+    import traceback
+    try:
+        _create_tray_impl(state)
+    except Exception:
+        path = _tray_log_path()
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"\n=== clawd-buddy tray crash @ {time.ctime()} ===\n")
+                traceback.print_exc(file=f)
+        except OSError:
+            pass
+        # Also try stderr (visible when run with --fg)
+        try:
+            sys.stderr.write(
+                f"[buddy] Tray thread crashed — see {path}\n"
+            )
+            traceback.print_exc()
+        except Exception:
+            pass
+
+
+def _create_tray_impl(state):
     import pystray
     from PIL import Image, ImageDraw
 
@@ -904,27 +1106,41 @@ def create_tray(state):
     def on_bring_to_front(_icon, _item):
         state.bring_to_front()
 
-    def on_theme_dark(_icon, _item):
-        state.set_theme("dark")
-
-    def on_theme_light(_icon, _item):
-        state.set_theme("light")
-
     def on_quit(icon, _item):
         state.should_quit = True
         icon.stop()
 
+    # pystray's _assert_action rejects callables whose __code__.co_argcount
+    # exceeds 2 — even when the extra parameter is a default. Build the
+    # closures via factories so each closure has exactly the arg count
+    # pystray expects (action: 2, checked: 1).
+    def _make_action(name):
+        def _action(_icon, _item):
+            state.set_theme(name)
+            save_theme_pref(name)
+        return _action
+
+    def _make_checker(name):
+        def _checker(_item):
+            return state.theme_name == name
+        return _checker
+
+    def _theme_item(name):
+        return pystray.MenuItem(
+            name.title(),
+            _make_action(name),
+            checked=_make_checker(name),
+            radio=True,
+        )
+
+    theme_submenu = pystray.Menu(*[
+        _theme_item(name) for name in THEME_NAMES
+    ])
+
     menu = pystray.Menu(
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),
-        pystray.MenuItem("Theme", pystray.Menu(
-            pystray.MenuItem(
-                "Dark", on_theme_dark,
-                checked=lambda _: state.theme_name == "dark"),
-            pystray.MenuItem(
-                "Light", on_theme_light,
-                checked=lambda _: state.theme_name == "light"),
-        )),
+        pystray.MenuItem("Theme", theme_submenu),
         pystray.MenuItem("Quit", on_quit),
     )
     pystray.Icon("clawd-buddy", img, "Clawd Buddy", menu).run()
@@ -943,7 +1159,9 @@ def parse_args():
             "  clawd-buddy --send Done!   Signal a running buddy\n"
             "  clawd-buddy --wave         Wave for attention\n"
             "  clawd-buddy --top          Bring buddy to front (re-assert topmost)\n"
-            "  clawd-buddy --theme light  Use light theme\n"
+            "  clawd-buddy --quit         Ask the running buddy to exit cleanly\n"
+            "  clawd-buddy --theme dracula   Use Dracula theme\n"
+            "  clawd-buddy --theme nord      Use Nord theme\n"
             "  clawd-buddy --startup      Run at login/startup\n"
             "  clawd-buddy --no-startup   Remove from login/startup\n"
         ),
@@ -960,8 +1178,15 @@ def parse_args():
                    help="Send wave/attention signal to running buddy and exit")
     p.add_argument("--top", action="store_true",
                    help="Tell running buddy to re-assert always-on-top and exit")
-    p.add_argument("--theme", choices=["dark", "light"], default="dark",
-                   help="Color theme (default: dark)")
+    p.add_argument("--quit", action="store_true",
+                   help="Ask running buddy to exit cleanly and exit")
+    p.add_argument("--theme", choices=list(THEMES.keys()), default=None,
+                   metavar="THEME",
+                   help=("Color theme. Choices: "
+                         + ", ".join(THEMES.keys())
+                         + ". If omitted, the last theme you picked is "
+                         "remembered (falls back to 'dark' on first run). "
+                         "Change at runtime via the tray Theme submenu."))
     p.add_argument("--startup", action="store_true",
                    help="Enable run at login/startup and exit")
     p.add_argument("--no-startup", action="store_true",
@@ -976,6 +1201,17 @@ def main():
     args = parse_args()
     port = args.port
 
+    # Resolve the active theme:
+    #   1. Explicit --theme on CLI wins (and is persisted as the new default).
+    #   2. Otherwise load the last saved theme from config.json.
+    #   3. Otherwise fall back to 'dark'.
+    if args.theme is not None:
+        save_theme_pref(args.theme)
+        resolved_theme = args.theme
+    else:
+        resolved_theme = load_saved_theme() or "dark"
+    args.theme = resolved_theme
+
     # --startup / --no-startup
     if args.startup:
         enable_startup()
@@ -984,9 +1220,11 @@ def main():
         disable_startup()
         sys.exit(0)
 
-    # --send / --wave / --top (signal a running instance)
-    if args.send is not None or args.wave or args.top:
-        if args.top:
+    # --send / --wave / --top / --quit (signal a running instance)
+    if args.send is not None or args.wave or args.top or args.quit:
+        if args.quit:
+            action = "quit"
+        elif args.top:
             action = "raise"
         elif args.wave:
             action = "wave"
@@ -1110,12 +1348,12 @@ def main():
                     running = False
                 elif ev.key == pygame.K_SPACE:
                     state.trigger()
-                elif ev.key in (pygame.K_1, pygame.K_2,
-                                pygame.K_3, pygame.K_4):
+                elif ev.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
+                    # Ctrl+1..4 resizes the buddy. Theme switching is now
+                    # exclusively via the tray Theme submenu.
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_CTRL:
-                        preset = ev.key - pygame.K_0
-                        state.set_scale(preset)
+                        state.set_scale(ev.key - pygame.K_0)
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 dragging = True
                 drag_off = ev.pos
