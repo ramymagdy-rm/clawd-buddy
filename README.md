@@ -17,14 +17,40 @@ Clawd Buddy is a small always-on-top character that lives on your taskbar while 
 
 ### Themes
 
-Clawd Buddy supports **dark** and **light** color themes:
+Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
+
+| # | Theme | Flavor |
+| --- | --- | --- |
+| 1 | `dark` | Classic dark blue-gray (default) |
+| 2 | `light` | Classic soft light |
+| 3 | `dracula` | Dark with purple / pink accents |
+| 4 | `monokai` | Dark with green / pink accents |
+| 5 | `nord` | Cool nordic blue |
+| 6 | `gruvbox` | Warm retro dark |
+| 7 | `solarized` | Muted solarized light |
+| 8 | `sunset` | Warm peach / orange light |
+
+Pick one at launch:
 
 ```bash
-clawd-buddy --theme dark    # default
-clawd-buddy --theme light   # light body, light screen
+clawd-buddy --theme dark        # default
+clawd-buddy --theme dracula
+clawd-buddy --theme sunset
 ```
 
-You can also toggle the theme at any time from the system tray icon menu.
+Switch at runtime from the **Theme** submenu on the system-tray icon
+(right-click the clawd-buddy tray icon → **Theme** → pick one). The active
+theme is marked as a radio item.
+
+Your choice is **remembered between launches**. The buddy stores the last
+theme in:
+
+- **Windows:** `%APPDATA%\clawd-buddy\config.json`
+- **Linux:** `$XDG_CONFIG_HOME/clawd-buddy/config.json`
+  (falls back to `~/.config/clawd-buddy/config.json`)
+
+Passing `--theme <name>` at launch overrides *and* updates the remembered
+theme, so the override sticks for next time too. First-run default is `dark`.
 
 ## Platform support
 
@@ -138,7 +164,10 @@ clawd-buddy                  Start buddy on taskbar
 clawd-buddy --test           Start with a celebration animation
 clawd-buddy --send MSG       Signal a running buddy to celebrate
 clawd-buddy --wave           Signal a running buddy to wave (needs attention)
-clawd-buddy --theme THEME    Color theme: dark (default) or light
+clawd-buddy --top            Tell a running buddy to re-assert always-on-top
+clawd-buddy --quit           Ask a running buddy to exit cleanly
+clawd-buddy --theme THEME    Color theme: dark (default), light, dracula,
+                             monokai, nord, gruvbox, solarized, sunset
 clawd-buddy --startup        Enable run at login/startup
 clawd-buddy --no-startup     Disable run at login/startup
 clawd-buddy --port PORT      Use a custom TCP port (default: 44556)
@@ -158,7 +187,7 @@ clawd-buddy --help           Show help
 | **Ctrl+3** | Scale to 150% |
 | **Ctrl+4** | Scale to 200% |
 | **Escape** | Quit the buddy |
-| **Tray icon** | Right-click the system tray icon for a menu |
+| **Tray icon** | Right-click the system tray icon for a menu — theme switcher lives here |
 
 ## How it works
 
@@ -210,6 +239,8 @@ Only one buddy can run at a time. If you launch `clawd-buddy` while one is alrea
 The buddy adds a system tray icon with a right-click menu:
 
 - **Test Celebration** — trigger the celebrate animation
+- **Bring to Front** — re-assert always-on-top (recovers z-order)
+- **Theme** — pick one of the 8 themes (current one is checked)
 - **Quit** — close the buddy
 
 ### Autostart
@@ -305,7 +336,7 @@ clawd-buddy --no-topmost
 
 ### Linux: window has a visible background
 
-On Linux, color-key transparency is not available. The buddy renders on a themed background (dark or light). Use `--theme light` on light panels/docks, or `--theme dark` on dark ones to blend in.
+On Linux, color-key transparency is not available. The buddy renders on a themed background that matches whichever of the 8 themes you choose. Pick a light theme (`light`, `solarized`, `sunset`) on light panels/docks, or a dark one (`dark`, `dracula`, `monokai`, `nord`, `gruvbox`) on dark ones to blend in.
 
 ## Disclaimer
 
