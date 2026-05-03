@@ -317,37 +317,72 @@ if sys.platform == "win32":
     def _win_get_screen_size():
         return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
-    # Startup — VBS launcher in Windows Startup folder
-    _WIN_STARTUP_DIR = os.path.join(
+    # Startup — HKCU Run registry key.
+    #
+    # Earlier versions dropped a .vbs launcher in the Startup folder so the
+    # console-subsystem clawd-buddy.exe could be started without a console
+    # window. Windows 11 Smart App Control blocks unsigned VBS scripts at
+    # login (error 800711C7), so we use the Run key instead and point it at
+    # the GUI-subsystem clawd-buddyw.exe (registered via [project.gui-scripts]
+    # in pyproject.toml) which starts silently with no console flash.
+    import winreg
+    _WIN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    _WIN_RUN_VALUE = "ClawdBuddy"
+    _WIN_LEGACY_STARTUP_DIR = os.path.join(
         os.environ.get("APPDATA", ""), "Microsoft", "Windows",
         "Start Menu", "Programs", "Startup",
     )
-    _VBS_NAME = "clawd-buddy-startup.vbs"
+    _WIN_LEGACY_VBS = "clawd-buddy-startup.vbs"
+
+    def _win_resolve_startup_exe():
+        # Prefer the GUI-subsystem launcher so no console flashes at login.
+        for name in ("clawd-buddyw", "clawd-buddy"):
+            found = shutil.which(name)
+            if found:
+                return found
+            candidate = os.path.join(
+                os.path.dirname(sys.executable), f"{name}.exe")
+            if os.path.exists(candidate):
+                return candidate
+        return "clawd-buddy"
+
+    def _win_remove_legacy_vbs():
+        path = os.path.join(_WIN_LEGACY_STARTUP_DIR, _WIN_LEGACY_VBS)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                print(f"[buddy] Removed legacy startup script")
+                print(f"        {path}")
+            except OSError as e:
+                print(f"[buddy] Could not remove legacy {path}: {e}")
 
     def _win_enable_startup():
-        exe = shutil.which("clawd-buddy")
-        if not exe:
-            candidate = os.path.join(
-                os.path.dirname(sys.executable), "clawd-buddy.exe")
-            exe = candidate if os.path.exists(candidate) else "clawd-buddy"
-        vbs = (
-            'Set WshShell = CreateObject("WScript.Shell")\n'
-            f'WshShell.Run """{exe}""", 0, False\n'
-        )
-        path = os.path.join(_WIN_STARTUP_DIR, _VBS_NAME)
-        os.makedirs(_WIN_STARTUP_DIR, exist_ok=True)
-        with open(path, "w") as f:
-            f.write(vbs)
+        exe = _win_resolve_startup_exe()
+        # Quote the path so spaces in user folders are handled.
+        command = f'"{exe}"'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY,
+                            0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, _WIN_RUN_VALUE, 0, winreg.REG_SZ, command)
+        _win_remove_legacy_vbs()
         print(f"[buddy] Enabled run at startup")
-        print(f"        {path}")
+        print(f"        HKCU\\{_WIN_RUN_KEY}\\{_WIN_RUN_VALUE} = {command}")
 
     def _win_disable_startup():
-        path = os.path.join(_WIN_STARTUP_DIR, _VBS_NAME)
-        if os.path.exists(path):
-            os.remove(path)
+        removed = False
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY,
+                                0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, _WIN_RUN_VALUE)
+            removed = True
             print(f"[buddy] Disabled run at startup")
-            print(f"        Removed {path}")
-        else:
+            print(f"        Removed HKCU\\{_WIN_RUN_KEY}\\{_WIN_RUN_VALUE}")
+        except FileNotFoundError:
+            pass
+        legacy = os.path.join(_WIN_LEGACY_STARTUP_DIR, _WIN_LEGACY_VBS)
+        if os.path.exists(legacy):
+            _win_remove_legacy_vbs()
+            removed = True
+        if not removed:
             print(f"[buddy] Not in startup (nothing to remove)")
 
 
