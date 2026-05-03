@@ -1,6 +1,6 @@
 [project]
 name = "clawd-buddy"
-version = "0.1.7"
+version = "0.1.8"
 description = "Animated terminal pet that sits on your taskbar and reacts to AI coding assistant events"
 readme = "README.md"
 license = "MIT"
@@ -35,6 +35,12 @@ Issues = "https://github.com/ramymagdy-rm/clawd-buddy/issues"
 
 [project.scripts]
 clawd-buddy = "clawd_buddy.app:main"
+
+# Windows-subsystem variant: same entry point, but launched without a
+# console window. Used by the autostart registration so the buddy starts
+# silently at login without flashing a black box.
+[project.gui-scripts]
+clawd-buddyw = "clawd_buddy.app:main"
 
 [build-system]
 requires = ["hatchling"]
