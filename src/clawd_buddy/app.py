@@ -50,9 +50,18 @@ import argparse
 import shutil
 
 from . import __version__ as APP_VERSION
+from .config import (
+    load_config,
+    load_saved_sound_pack,
+    load_saved_theme,
+    save_config,
+    save_sound_pack_pref,
+    save_theme_pref,
+)
 from .constants import (
     CHAR_H, CHAR_W, FPS, SOCK_HOST, SOCK_PORT, TKEY, WIN_H, WIN_W,
 )
+from .ipc import send_signal, socket_listener
 from .state import (
     BuddyState,
     MAX_THINKING_SECONDS,
@@ -653,153 +662,6 @@ def get_bg_fill(theme_name):
 
 
 
-# ── Socket listener ───────────────────────────────────────────────────
-def socket_listener(state, port):
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        srv.bind((SOCK_HOST, port))
-    except OSError as e:
-        print(f"[buddy] Cannot bind {SOCK_HOST}:{port}: {e}")
-        return
-    srv.listen(5)
-    srv.settimeout(1.0)
-    print(f"[buddy] Listening on {SOCK_HOST}:{port}")
-
-    while True:
-        try:
-            conn, _ = srv.accept()
-            try:
-                conn.settimeout(2.0)
-                data = conn.recv(4096).decode("utf-8", errors="replace").strip()
-            finally:
-                conn.close()
-            if data:
-                action = "celebrate"
-                msg = {}
-                try:
-                    msg = json.loads(data)
-                    action = msg.get("action", "celebrate")
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-                print(f"[buddy] Signal: {action}")
-                if action == "wave":
-                    state.wave()
-                elif action == "raise":
-                    state.bring_to_front()
-                elif action == "quit":
-                    state.should_quit = True
-                elif action == "prompt_start":
-                    state.prompt_start(session_id=msg.get("session_id"))
-                elif action == "greet":
-                    state.greet(session_id=msg.get("session_id"))
-                elif action == "thinking_start":
-                    state.start_thinking()
-                elif action == "thinking_end":
-                    state.end_thinking()
-                else:
-                    state.trigger()
-        except socket.timeout:
-            continue
-        except Exception as e:
-            print(f"[buddy] Socket error: {e}")
-
-
-# ── Persistent config (remembered theme, etc.) ────────────────────────
-def _config_dir():
-    """Per-OS directory for clawd-buddy's user config."""
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA") or os.path.expanduser(
-            "~\\AppData\\Roaming"
-        )
-    else:
-        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
-            os.path.expanduser("~"), ".config"
-        )
-    return os.path.join(base, "clawd-buddy")
-
-
-def _config_path():
-    return os.path.join(_config_dir(), "config.json")
-
-
-def load_config():
-    """Read config.json. Returns an empty dict on any error."""
-    try:
-        with open(_config_path(), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return data
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
-    return {}
-
-
-def save_config(data):
-    """Atomically write config.json. Non-fatal on failure."""
-    path = _config_path()
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, path)
-    except OSError as e:
-        print(f"[buddy] Could not save config: {e}")
-
-
-def load_saved_theme():
-    """Return the last remembered theme name, or None if unknown / invalid."""
-    name = load_config().get("theme")
-    return name if name in THEMES else None
-
-
-def save_theme_pref(name):
-    """Persist the user's theme selection. Called on launch override and
-    whenever the tray Theme submenu changes the active theme."""
-    if name not in THEMES:
-        return
-    cfg = load_config()
-    if cfg.get("theme") == name:
-        return  # no-op write avoided
-    cfg["theme"] = name
-    save_config(cfg)
-
-
-def load_saved_sound_pack():
-    """Return the last remembered sound-pack name.
-
-    Defaults to DEFAULT_SOUND_PACK on first run / corrupt config so the
-    buddy still chirps out of the box. Also migrates the legacy
-    `sound: bool` key written by an earlier iteration of this feature:
-      sound=False ⇒ "off", sound=True ⇒ DEFAULT_SOUND_PACK.
-    The new key takes precedence if both exist.
-    """
-    cfg = load_config()
-    pack = cfg.get("sound_pack")
-    if isinstance(pack, str) and pack in SOUND_PACK_CHOICES:
-        return pack
-    legacy = cfg.get("sound")
-    if legacy is False:
-        return SOUND_PACK_OFF
-    return DEFAULT_SOUND_PACK
-
-
-def save_sound_pack_pref(pack):
-    """Persist the chosen sound pack. Called from the tray Sound submenu.
-
-    Also strips the legacy `sound: bool` key on first new write so the
-    config doesn't accumulate dead keys after migration.
-    """
-    if pack not in SOUND_PACK_CHOICES:
-        return
-    cfg = load_config()
-    if cfg.get("sound_pack") == pack and "sound" not in cfg:
-        return
-    cfg["sound_pack"] = pack
-    cfg.pop("sound", None)
-    save_config(cfg)
-
 
 # ── Buddy icon image (shared by tray + About dialog) ─────────────────
 def _make_buddy_icon_image():
@@ -1166,14 +1028,9 @@ def main():
                 payload_obj["session_id"] = session_id
         else:
             payload_obj["action"] = "celebrate"
-        payload = json.dumps(payload_obj).encode()
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((SOCK_HOST, port))
-            s.sendall(payload)
-            s.close()
+        if send_signal(payload_obj, port=port):
             print(f"[buddy] Sent: {payload_obj['action']}")
-        except ConnectionRefusedError:
+        else:
             print(f"[buddy] No buddy on port {port}")
             sys.exit(1)
         sys.exit(0)
@@ -1213,13 +1070,9 @@ def main():
         lock_sock.bind(("127.0.0.1", port + 1))
     except OSError:
         print("[buddy] Already running — sending signal.")
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect((SOCK_HOST, port))
-            s.sendall(b'{"message": "hello"}')
-            s.close()
-        except Exception:
-            pass
+        # Best-effort hello — the running buddy treats unknown actions as
+        # a celebrate, but a malformed payload here would just be ignored.
+        send_signal({"message": "hello"}, port=port)
         sys.exit(0)
 
     # Compute initial window position (may init display subsystem)
