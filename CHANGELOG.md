@@ -11,9 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **`--version` CLI flag** — `clawd-buddy --version` prints the package
   version (e.g. `clawd-buddy 0.1.9`) and exits. Powered by argparse's
   built-in version action.
-- **Tray "About" entry** — disabled informational item `Clawd Buddy vX.Y.Z`
-  above **Quit** so the running version is visible without dropping to a
-  shell.
+- **Tray version label + About dialog** — a disabled `Clawd Buddy vX.Y.Z`
+  label sits above a clickable **About** entry, which opens a small
+  tkinter popup with version, description, author, license, and a
+  clickable repo link.
 - **`__version__` on the package** — `from clawd_buddy import __version__`
   exposes the version string, sourced from `importlib.metadata` so
   `pyproject.toml` stays the single source of truth (with a `0.0.0+source`

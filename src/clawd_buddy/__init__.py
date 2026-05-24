@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Ramy Ezzat
+# Licensed under the MIT License — see LICENSE in the project root.
+
 """Clawd Buddy — animated terminal pet that reacts to coding assistant events."""
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
