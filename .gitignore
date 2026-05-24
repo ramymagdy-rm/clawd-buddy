@@ -25,3 +25,6 @@ Desktop.ini
 # Env
 .env
 .env.local
+
+# AI
+.ai/
