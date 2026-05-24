@@ -73,6 +73,50 @@ CONFETTI_COLORS = [
 ]
 
 
+# ── M3 helpers (pure, testable without instantiating BuddyState) ─────
+def _clamp_volume(v):
+    """Coerce a volume value into [0.0, 1.0]. Non-numeric input ⇒ 1.0
+    so a corrupt config doesn't end up muting the buddy permanently."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return 1.0
+    if v != v:  # NaN
+        return 1.0
+    return max(0.0, min(1.0, v))
+
+
+def _normalize_quiet(start, end):
+    """Validate a (start, end) quiet-hours pair (minutes-from-midnight).
+
+    Returns the pair unchanged when both are valid integers in
+    [0, 1439]. Returns (None, None) — i.e. disabled — for any other
+    input (mixed None, out-of-range, non-int, or start==end zero-length
+    window). Treating malformed values as 'disabled' keeps the buddy
+    chirping when a config gets corrupted rather than silently muting.
+    """
+    if start is None or end is None:
+        return None, None
+    if not (isinstance(start, int) and isinstance(end, int)):
+        return None, None
+    if not (0 <= start < 1440 and 0 <= end < 1440):
+        return None, None
+    if start == end:
+        return None, None
+    return start, end
+
+
+def _in_quiet_window(start, end, now_min):
+    """Return True if `now_min` (minutes-from-midnight) falls inside
+    the [start, end) window. Handles wraparound: when start > end
+    (e.g. 23:00 → 08:00), the window spans midnight."""
+    if start is None or end is None:
+        return False
+    if start < end:
+        return start <= now_min < end
+    return now_min >= start or now_min < end
+
+
 def _spawn_confetti(n):
     """Build n confetti particles for the celebrate animation.
 
@@ -92,7 +136,9 @@ def _spawn_confetti(n):
 class BuddyState:
     SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0}
 
-    def __init__(self, theme_name="dark", sound_pack=None, clock=None):
+    def __init__(self, theme_name="dark", sound_pack=None, clock=None,
+                 reduce_motion=False, volume=1.0,
+                 quiet_start=None, quiet_end=None):
         # `clock` indirection so unit tests can advance time without
         # actually sleeping. Defaults to time.time at runtime.
         self._clock = clock if clock is not None else time.time
@@ -140,6 +186,36 @@ class BuddyState:
         # into windowing code.
         self.topmost = True
 
+        # M3: when wave/greet preempts thinking, remember to resume the
+        # thinking animation after the cue clears (and any items behind
+        # it in the queue drain). Cleared by celebrate — Stop semantically
+        # ends thinking — or by explicit end_thinking. Without this flag
+        # the buddy fell back to idle after an attention cue even though
+        # Claude was still working.
+        self._resume_thinking = False
+
+        # M3: accessibility / comfort preferences.
+        # `reduce_motion` strips bob, limb swings, confetti, and ambient
+        # eye/mouth animation — keeps only the attention border and
+        # sounds (the signaling minimum), so users with vestibular
+        # sensitivities can still tell what's happening without motion.
+        # `volume` is a 0.0–1.0 multiplier applied on top of each pack's
+        # per-sound base level — surfaced as discrete steps in the tray
+        # but stored as a float so future sliders can fill in.
+        # `quiet_start` / `quiet_end` are minutes-from-midnight; when
+        # both are set, sounds are muted within the window (handles the
+        # 23:00–07:00 wraparound, see `is_quiet_now`).
+        self.reduce_motion = bool(reduce_motion)
+        self.volume = _clamp_volume(volume)
+        self.quiet_start, self.quiet_end = _normalize_quiet(
+            quiet_start, quiet_end)
+
+        # Dirty flag — the audio mixer's per-sound volumes live in
+        # pygame's Sound objects, owned by app.py. The state holds the
+        # user preference and flips this so the main loop knows to
+        # re-apply on the next frame. Same pattern as `_scale_changed`.
+        self._volume_changed = False
+
     # ── Sound ────────────────────────────────────────────────────
     @property
     def sound_enabled(self):
@@ -156,6 +232,45 @@ class BuddyState:
         self.sound_pack = pack
         if pack != SOUND_PACK_OFF:
             self._pending_sound = "celebrate"
+
+    def set_volume(self, v):
+        """Set the user volume multiplier (0.0–1.0). Flags
+        `_volume_changed` so the main loop re-applies it to every
+        cached pygame Sound on the next frame. Also queues a celebrate
+        preview at the new level when sound is enabled — picking a
+        volume in the tray is most useful when you can hear it."""
+        new_vol = _clamp_volume(v)
+        if new_vol == self.volume:
+            return
+        self.volume = new_vol
+        self._volume_changed = True
+        if self.sound_enabled and new_vol > 0.0:
+            self._pending_sound = "celebrate"
+
+    def set_reduce_motion(self, enabled):
+        """Toggle reduce-motion. When on, drawing suppresses bobbing,
+        limb swings, confetti, and ambient pupil/mouth animation —
+        keeps the attention border and sounds (the signaling minimum
+        per the M3 design note)."""
+        self.reduce_motion = bool(enabled)
+
+    def set_quiet_hours(self, start, end):
+        """Set the quiet-hours window. Pass (None, None) to disable.
+        Both endpoints are minutes-from-midnight; the window wraps over
+        midnight when start > end (typical 23:00–08:00 case)."""
+        self.quiet_start, self.quiet_end = _normalize_quiet(start, end)
+
+    def is_quiet_now(self, now_min=None):
+        """True if quiet hours are configured AND the current local
+        time falls inside the window. `now_min` (minutes-from-midnight)
+        is the testing seam; production callers omit it and we read
+        `time.localtime()` instead."""
+        if self.quiet_start is None or self.quiet_end is None:
+            return False
+        if now_min is None:
+            lt = time.localtime()
+            now_min = lt.tm_hour * 60 + lt.tm_min
+        return _in_quiet_window(self.quiet_start, self.quiet_end, now_min)
 
     # ── Mode introspection (used by drawing and tests) ───────────
     @property
@@ -306,14 +421,17 @@ class BuddyState:
         """Single entry point for all mode transitions. Either applies
         the action immediately or enqueues it; see the decision doc."""
         if action == "end_thinking":
+            self._resume_thinking = False
             if self.mode == "thinking":
                 self._enter("idle")
             return
 
         if action == "start_thinking":
             if self.mode == "thinking":
+                self._resume_thinking = False
                 return  # already thinking
             if self.mode == "idle":
+                self._resume_thinking = False
                 self._enter("thinking")
                 return
             self._enqueue(action, kwargs)
@@ -334,11 +452,28 @@ class BuddyState:
 
     def _enter_reactive(self, action, kwargs):
         """Switch to the reactive mode for `action`, doing any per-action
-        side effects (confetti spawn, pending sound)."""
+        side effects (confetti spawn, pending sound).
+
+        M3: maintain `_resume_thinking` so an attention cue (wave / greet)
+        that interrupts thinking restores thinking when it clears.
+        Celebrate is the Stop signal — semantically ends thinking, so it
+        clears the flag. Only set the flag when transitioning *from*
+        thinking (the initial preemption); chained reactives popped from
+        the queue keep whatever value was set earlier.
+        """
+        if action == "celebrate":
+            self._resume_thinking = False
+        elif action in ("wave", "greet") and self.mode == "thinking":
+            self._resume_thinking = True
         self.mode = _ACTION_TO_MODE[action]
         self.mode_start = self._clock()
         if action == "celebrate":
-            self.confetti = _spawn_confetti(40)
+            # M3: reduce-motion skips the confetti particle physics
+            # entirely (the swarm of falling rectangles is the most
+            # motion-heavy element). Sound + border still fire so the
+            # celebrate is still legible.
+            if not self.reduce_motion:
+                self.confetti = _spawn_confetti(40)
             if self.sound_enabled:
                 self._pending_sound = "celebrate"
         elif action == "wave":
@@ -359,15 +494,23 @@ class BuddyState:
 
     def _advance_from_reactive(self):
         """A reactive mode just expired. Pop the next queued action and
-        apply it; if the queue is empty, fall back to idle."""
+        apply it; if the queue is empty, fall back to idle — or to
+        thinking, if a prior wave/greet preempted it (see
+        `_resume_thinking`)."""
         if not self._queue:
-            self._enter("idle")
+            if self._resume_thinking:
+                self._resume_thinking = False
+                self._enter("thinking")
+            else:
+                self._enter("idle")
             return
         action, kwargs = self._queue.pop(0)
         if action == "start_thinking":
+            self._resume_thinking = False
             self._enter("thinking")
         elif action in ("celebrate", "wave", "greet"):
             self._enter_reactive(action, kwargs)
         else:
             # end_thinking or unknown — degrade to idle.
+            self._resume_thinking = False
             self._enter("idle")

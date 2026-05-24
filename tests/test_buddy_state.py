@@ -181,6 +181,96 @@ class TestQueue:
         assert state.mode == "idle"
 
 
+# ── Thinking resume after attention cue (M3 fix) ─────────────────────
+class TestThinkingResumeAfterAttentionCue:
+    """The bug: when an attention cue (wave / yellow border) interrupted
+    thinking, the buddy fell back to idle after the cue cleared — even if
+    Claude was still working. Expected behaviour is that thinking resumes
+    until the next Stop event. Celebrate is the Stop event, so it should
+    NOT trigger a resume (Stop ends thinking semantically).
+    """
+
+    def test_wave_during_thinking_resumes_thinking_after(self, state, clock):
+        state.start_thinking()
+        state.wave()
+        assert state.mode == "waving"
+        clock.advance(state.wave_dur + 0.1)
+        state.update()
+        assert state.mode == "thinking"
+
+    def test_greet_during_thinking_resumes_thinking_after(self, state, clock):
+        state.start_thinking()
+        state.greet()
+        assert state.mode == "greeting"
+        clock.advance(state.greet_dur + 0.1)
+        state.update()
+        assert state.mode == "thinking"
+
+    def test_celebrate_during_thinking_does_not_resume(self, state, clock):
+        # Celebrate is the Stop event — it ends thinking.
+        state.start_thinking()
+        state.trigger()
+        clock.advance(state.cel_dur + 0.1)
+        state.update()
+        assert state.mode == "idle"
+
+    def test_end_thinking_after_wave_clears_resume(self, state, clock):
+        state.start_thinking()
+        state.wave()
+        state.end_thinking()  # explicit "stop thinking" wins over resume
+        clock.advance(state.wave_dur + 0.1)
+        state.update()
+        assert state.mode == "idle"
+
+    def test_wave_then_celebrate_clears_resume(self, state, clock):
+        # Wave preempts thinking → flag set. Celebrate queues behind wave.
+        # Once celebrate pops, it clears the flag — final fallback is idle.
+        state.start_thinking()
+        state.wave()
+        state.trigger()
+        assert state.queue_depth == 1
+        clock.advance(state.wave_dur + 0.1)
+        state.update()
+        assert state.mode == "celebrating"
+        clock.advance(state.cel_dur + 0.1)
+        state.update()
+        assert state.mode == "idle"
+
+    def test_chained_waves_during_thinking_still_resume(self, state, clock):
+        # Wave preempts thinking → wave again queues. After both clear,
+        # thinking should still resume (the flag survives chained reactives).
+        state.start_thinking()
+        state.wave()
+        state.wave()
+        assert state.queue_depth == 1
+        clock.advance(state.wave_dur + 0.1)
+        state.update()
+        assert state.mode == "waving"
+        clock.advance(state.wave_dur + 0.1)
+        state.update()
+        assert state.mode == "thinking"
+
+    def test_wave_from_idle_does_not_resume(self, state, clock):
+        # Wave entered from idle (not thinking) should fall back to idle —
+        # no spurious thinking animation.
+        state.wave()
+        clock.advance(state.wave_dur + 0.1)
+        state.update()
+        assert state.mode == "idle"
+
+    def test_start_thinking_clears_resume_flag(self, state, clock):
+        state.start_thinking()
+        state.wave()
+        # Internal state: resume flag is set. Explicit start_thinking
+        # should be idempotent and clear it (we're going to thinking
+        # anyway when the wave ends, but the flag should match reality).
+        state.start_thinking()  # queued behind wave
+        assert state.queue_depth == 1
+        clock.advance(state.wave_dur + 0.1)
+        state.update()
+        assert state.mode == "thinking"
+
+
 # ── Reactive mode expiration ─────────────────────────────────────────
 class TestExpiration:
     def test_celebrate_falls_back_to_idle(self, state, clock):
@@ -362,6 +452,221 @@ class TestRecordAction:
 class TestTopmost:
     def test_default_topmost_true(self, state):
         assert state.topmost is True
+
+
+# ── Reduce-motion (M3) ───────────────────────────────────────────────
+class TestReduceMotion:
+    def test_default_is_off(self, state):
+        assert state.reduce_motion is False
+
+    def test_constructor_param_respected(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   reduce_motion=True)
+        assert s.reduce_motion is True
+
+    def test_setter_coerces_to_bool(self, state):
+        state.set_reduce_motion(1)
+        assert state.reduce_motion is True
+        state.set_reduce_motion(0)
+        assert state.reduce_motion is False
+
+    def test_celebrate_with_reduce_motion_skips_confetti(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   reduce_motion=True)
+        s.trigger()
+        assert s.mode == "celebrating"
+        # Confetti is the most motion-heavy element — should be empty.
+        assert s.confetti == []
+
+    def test_celebrate_without_reduce_motion_spawns_confetti(self, state):
+        state.trigger()
+        # 40 particles per the spec.
+        assert len(state.confetti) == 40
+
+    def test_reduce_motion_does_not_block_sound(self, clock):
+        # Roadmap: "border + sound only". Sound must still fire when
+        # the pack is enabled.
+        s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock,
+                                   reduce_motion=True)
+        s.trigger()
+        assert s._pending_sound == "celebrate"
+
+
+# ── Volume (M3) ──────────────────────────────────────────────────────
+class TestVolume:
+    def test_default_is_full(self, state):
+        assert state.volume == 1.0
+
+    def test_constructor_clamps_out_of_range(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   volume=1.7)
+        assert s.volume == 1.0
+        s2 = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                    volume=-0.5)
+        assert s2.volume == 0.0
+
+    def test_constructor_falls_back_on_garbage(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   volume="loud")
+        assert s.volume == 1.0  # safe fallback
+
+    def test_setter_clamps_and_flags_dirty(self, state):
+        assert state._volume_changed is False
+        state.set_volume(0.5)
+        assert state.volume == 0.5
+        assert state._volume_changed is True
+
+    def test_setter_no_op_when_unchanged(self, state):
+        state.set_volume(0.5)
+        state._volume_changed = False  # main loop would have cleared
+        state.set_volume(0.5)
+        # No-op write must not re-flag the main loop.
+        assert state._volume_changed is False
+
+    def test_setter_previews_on_change(self, clock):
+        s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock)
+        s.set_volume(0.5)
+        # Volume picker previews via the celebrate sound — same UX
+        # affordance as the sound-pack submenu.
+        assert s._pending_sound == "celebrate"
+
+    def test_setter_no_preview_at_zero(self, clock):
+        # Volume 0 means muted — no point playing a preview the user
+        # can't hear.
+        s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock)
+        s.set_volume(0.0)
+        assert s._pending_sound is None
+
+    def test_setter_no_preview_when_pack_off(self, state):
+        # state fixture uses sound_pack="off" → no preview regardless.
+        state.set_volume(0.5)
+        assert state._pending_sound is None
+
+
+# ── Quiet hours (M3) ─────────────────────────────────────────────────
+class TestQuietHours:
+    def test_default_is_disabled(self, state):
+        assert state.quiet_start is None
+        assert state.quiet_end is None
+        assert state.is_quiet_now() is False
+
+    def test_constructor_sets_window(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   quiet_start=23 * 60, quiet_end=8 * 60)
+        assert s.quiet_start == 23 * 60
+        assert s.quiet_end == 8 * 60
+
+    def test_constructor_rejects_partial_window(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   quiet_start=23 * 60, quiet_end=None)
+        # Mixed None+int ⇒ disabled (avoids partial-config foot-guns).
+        assert s.quiet_start is None
+        assert s.quiet_end is None
+
+    def test_constructor_rejects_zero_length(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   quiet_start=600, quiet_end=600)
+        assert s.quiet_start is None
+        assert s.quiet_end is None
+
+    def test_constructor_rejects_out_of_range(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   quiet_start=2000, quiet_end=8 * 60)
+        assert s.quiet_start is None
+        assert s.quiet_end is None
+
+    def test_setter_normalizes(self, state):
+        state.set_quiet_hours(23 * 60, 8 * 60)
+        assert state.quiet_start == 23 * 60
+        assert state.quiet_end == 8 * 60
+        state.set_quiet_hours(None, None)
+        assert state.quiet_start is None
+        assert state.quiet_end is None
+
+    def test_is_quiet_now_inside_normal_window(self, state):
+        state.set_quiet_hours(60, 600)  # 01:00 – 10:00
+        # Inject `now_min` rather than monkey-patching time.localtime.
+        assert state.is_quiet_now(now_min=300) is True   # 05:00
+        assert state.is_quiet_now(now_min=720) is False  # 12:00
+
+    def test_is_quiet_now_handles_midnight_wraparound(self, state):
+        state.set_quiet_hours(23 * 60, 8 * 60)  # 23:00 – 08:00
+        # Inside (before midnight):
+        assert state.is_quiet_now(now_min=23 * 60 + 30) is True   # 23:30
+        # Inside (after midnight):
+        assert state.is_quiet_now(now_min=3 * 60) is True         # 03:00
+        # Outside:
+        assert state.is_quiet_now(now_min=10 * 60) is False       # 10:00
+        # Boundary: end is exclusive.
+        assert state.is_quiet_now(now_min=8 * 60) is False        # 08:00
+        # Boundary: start is inclusive.
+        assert state.is_quiet_now(now_min=23 * 60) is True        # 23:00
+
+    def test_is_quiet_now_disabled_returns_false(self, state):
+        # No window set ⇒ never quiet.
+        assert state.is_quiet_now(now_min=0) is False
+        assert state.is_quiet_now(now_min=23 * 60) is False
+
+
+class TestQuietHoursHelpers:
+    """The pure helpers carry the trickiest logic — wraparound,
+    range validation — so they get their own unit tests independent
+    of BuddyState."""
+
+    def test_in_window_normal(self):
+        assert buddy_state._in_quiet_window(60, 600, 300) is True
+        assert buddy_state._in_quiet_window(60, 600, 30) is False
+        assert buddy_state._in_quiet_window(60, 600, 700) is False
+
+    def test_in_window_wraparound(self):
+        # 23:00 – 08:00 (start > end)
+        assert buddy_state._in_quiet_window(23 * 60, 8 * 60, 0) is True
+        assert buddy_state._in_quiet_window(23 * 60, 8 * 60, 7 * 60) is True
+        assert buddy_state._in_quiet_window(23 * 60, 8 * 60, 8 * 60) is False
+        assert buddy_state._in_quiet_window(
+            23 * 60, 8 * 60, 23 * 60 + 30) is True
+        assert buddy_state._in_quiet_window(
+            23 * 60, 8 * 60, 22 * 60 + 59) is False
+
+    def test_in_window_none_endpoints_disabled(self):
+        assert buddy_state._in_quiet_window(None, 600, 300) is False
+        assert buddy_state._in_quiet_window(60, None, 300) is False
+
+    def test_clamp_volume_in_range(self):
+        assert buddy_state._clamp_volume(0.5) == 0.5
+
+    def test_clamp_volume_clamps_high(self):
+        assert buddy_state._clamp_volume(1.5) == 1.0
+
+    def test_clamp_volume_clamps_low(self):
+        assert buddy_state._clamp_volume(-0.3) == 0.0
+
+    def test_clamp_volume_garbage_defaults_to_one(self):
+        assert buddy_state._clamp_volume("x") == 1.0
+        assert buddy_state._clamp_volume(None) == 1.0
+
+    def test_clamp_volume_rejects_nan(self):
+        # NaN slipping through into pygame mixer would silently break
+        # playback — coerce to the safe default instead.
+        assert buddy_state._clamp_volume(float("nan")) == 1.0
+
+    def test_normalize_quiet_passthrough(self):
+        assert buddy_state._normalize_quiet(60, 600) == (60, 600)
+
+    def test_normalize_quiet_mixed_none_disabled(self):
+        assert buddy_state._normalize_quiet(60, None) == (None, None)
+        assert buddy_state._normalize_quiet(None, 600) == (None, None)
+
+    def test_normalize_quiet_rejects_non_int(self):
+        assert buddy_state._normalize_quiet("23:00", 600) == (None, None)
+        assert buddy_state._normalize_quiet(60, 1.5) == (None, None)
+
+    def test_normalize_quiet_rejects_out_of_range(self):
+        assert buddy_state._normalize_quiet(-1, 600) == (None, None)
+        assert buddy_state._normalize_quiet(60, 1440) == (None, None)
+
+    def test_normalize_quiet_rejects_zero_length(self):
+        assert buddy_state._normalize_quiet(600, 600) == (None, None)
 
 
 # ── Sound pack interaction ───────────────────────────────────────────

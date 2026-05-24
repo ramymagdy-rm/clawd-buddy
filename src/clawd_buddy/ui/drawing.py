@@ -171,10 +171,16 @@ def draw_buddy(surf, t, state, blink):
     wav = state.waving
     greet = state.greeting
     think = state.thinking
+    # M3: reduce-motion strips ambient periodic motion. Per the roadmap
+    # ("border + sound only, no bobbing/confetti") we keep only the
+    # attention border pulse and sound — every other sin()-driven term
+    # below collapses to its static midpoint when this is set.
+    reduced = bool(getattr(state, "reduce_motion", False))
     cx = WIN_W // 2
     base_y = WIN_H - 70
-    bob = math.sin(t * 2.2) * 1.5
-    if cel:
+    if reduced:
+        bob = 0.0
+    elif cel:
         bob = math.sin(t * 10) * 6
     elif wav:
         bob = math.sin(t * 4) * 3
@@ -184,13 +190,17 @@ def draw_buddy(surf, t, state, blink):
         # Slower, slightly higher amplitude than idle — a "concentrating
         # sway" that reads as alive but not excited.
         bob = math.sin(t * 1.3) * 1.8
+    else:
+        bob = math.sin(t * 2.2) * 1.5
 
     by = int(base_y - CHAR_H + bob)
 
     # ── Legs ──────────────────────────────────────────────────────
     leg_top = int(by + CHAR_H - 2)
     leg_len = 18
-    if cel:
+    if reduced:
+        l_swing = r_swing = 0.0
+    elif cel:
         l_swing = math.sin(t * 7) * 8
         r_swing = math.sin(t * 7 + math.pi) * 8
     elif wav:
@@ -212,7 +222,22 @@ def draw_buddy(surf, t, state, blink):
     # ── Arms ──────────────────────────────────────────────────────
     arm_y = int(by + CHAR_H // 2 + bob)
     arm_len = 22
-    if cel:
+    if reduced:
+        # Static neutral pose — arms hang at the same midpoints the
+        # sin() expressions oscillate around, so the body proportions
+        # look the same as a paused frame of the idle animation.
+        if wav:
+            # Keep the wave arm visibly raised so the cue is still
+            # readable without motion. Magnitude matches the wave's
+            # midpoint (-1.0) rather than idle's (+0.2).
+            la, ra = -0.2, -1.0
+        elif greet:
+            la, ra = -0.2, -0.6
+        elif cel:
+            la, ra = -1.3, 0.3
+        else:
+            la, ra = -0.2, 0.2
+    elif cel:
         la = math.sin(t * 8) * 0.5 - 1.3
         ra = math.sin(t * 8 + math.pi) * 0.5 + 0.3
     elif wav:
@@ -287,15 +312,21 @@ def draw_buddy(surf, t, state, blink):
         # Pupils lifted slightly + a slow horizontal sweep ⇒ "considering".
         for ex in (lex, rex):
             pygame.draw.circle(surf, th["eye_white"], (ex, ey), er)
-            px = ex + math.sin(t * 0.9) * 3
-            py = ey - 2 + math.cos(t * 0.5) * 0.5
+            if reduced:
+                px, py = ex, ey - 2  # frozen "lifted" gaze
+            else:
+                px = ex + math.sin(t * 0.9) * 3
+                py = ey - 2 + math.cos(t * 0.5) * 0.5
             pygame.draw.circle(surf, th["pupil"], (int(px), int(py)), 4)
             pygame.draw.circle(surf, (255, 255, 255), (ex - 2, ey - 4), 2)
     else:
         for ex in (lex, rex):
             pygame.draw.circle(surf, th["eye_white"], (ex, ey), er)
-            px = ex + math.sin(t * 0.6 + ex * 0.01) * 2
-            py = ey + math.cos(t * 0.8) * 1.5
+            if reduced:
+                px, py = ex, ey  # centered, no idle drift
+            else:
+                px = ex + math.sin(t * 0.6 + ex * 0.01) * 2
+                py = ey + math.cos(t * 0.8) * 1.5
             pygame.draw.circle(surf, th["pupil"], (int(px), int(py)), 4)
             pygame.draw.circle(surf, (255, 255, 255), (ex - 2, ey - 3), 2)
 
@@ -314,7 +345,7 @@ def draw_buddy(surf, t, state, blink):
         pygame.draw.circle(surf, th["wave_eye"], (cx, my - 2), 4, 2)
     else:
         # Idle and thinking share the calm mouth line.
-        w_m = 10 + math.sin(t * 1.5) * 1
+        w_m = 10 if reduced else 10 + math.sin(t * 1.5) * 1
         pygame.draw.line(surf, th["mouth"],
                          (int(cx - w_m / 2), my),
                          (int(cx + w_m / 2), my), 2)
@@ -362,10 +393,17 @@ def draw_buddy(surf, t, state, blink):
 
     # ── Attention indicator ───────────────────────────────────────
     if wav:
-        pulse = (math.sin(t * 5) + 1) / 2
-        alpha_val = int(180 + 75 * pulse)
+        if reduced:
+            # Static bang — neutral position, mid-range alpha. Keeps
+            # the cue legible without the up-and-down bounce or the
+            # alpha pulse, both of which read as motion.
+            alpha_val = 218  # midpoint of the 180..255 pulse band
+            iy = by - 18
+        else:
+            pulse = (math.sin(t * 5) + 1) / 2
+            alpha_val = int(180 + 75 * pulse)
+            iy = int(by - 18 + math.sin(t * 3) * 4)
         ix = cx + 30
-        iy = int(by - 18 + math.sin(t * 3) * 4)
         bang_surf = pygame.Surface((20, 28), pygame.SRCALPHA)
         bang_color = (*th["wave_eye"], alpha_val)
         pygame.draw.rect(bang_surf, bang_color, (7, 2, 6, 14),
@@ -380,8 +418,11 @@ def draw_buddy(surf, t, state, blink):
     if think:
         dot_y = by - 12
         for i, dx in enumerate((-10, 0, 10)):
-            phase = (math.sin(t * 3.5 + i * 1.4) + 1) / 2
-            alpha_val = int(70 + 150 * phase)
+            if reduced:
+                alpha_val = 145  # midpoint of the 70..220 pulse band
+            else:
+                phase = (math.sin(t * 3.5 + i * 1.4) + 1) / 2
+                alpha_val = int(70 + 150 * phase)
             dot_surf = pygame.Surface((8, 8), pygame.SRCALPHA)
             pygame.draw.circle(
                 dot_surf, (160, 130, 220, alpha_val), (4, 4), 3,

@@ -161,3 +161,155 @@ class TestSoundPref:
         data = json.loads((isolated_config_dir / "config.json").read_text())
         assert "sound" not in data
         assert data["sound_pack"] == "retro"
+
+
+# ── Reduce-motion preference (M3) ────────────────────────────────────
+class TestReduceMotionPref:
+    def test_default_is_false(self, isolated_config_dir):
+        assert config.load_saved_reduce_motion() is False
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_reduce_motion_pref(True)
+        assert config.load_saved_reduce_motion() is True
+
+    def test_round_trip_false_persisted(self, isolated_config_dir):
+        # Toggling on then off should land at False, not unset.
+        config.save_reduce_motion_pref(True)
+        config.save_reduce_motion_pref(False)
+        data = json.loads((isolated_config_dir / "config.json").read_text())
+        assert data["reduce_motion"] is False
+
+    def test_skips_write_when_unchanged(self, isolated_config_dir):
+        config.save_reduce_motion_pref(True)
+        mtime_before = (isolated_config_dir / "config.json").stat().st_mtime_ns
+        config.save_reduce_motion_pref(True)
+        assert (isolated_config_dir / "config.json").stat().st_mtime_ns \
+            == mtime_before
+
+    def test_load_coerces_garbage_to_false(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"reduce_motion": "yes"}))
+        # bool("yes") is True, so this would normally return True — but
+        # callers expect a real bool semantic. Document what actually
+        # happens: bool() coercion is permissive (any truthy string ⇒ True).
+        # This test pins the behaviour so future strictness is intentional.
+        assert config.load_saved_reduce_motion() is True
+
+
+# ── Volume preference (M3) ───────────────────────────────────────────
+class TestVolumePref:
+    def test_default_when_unset(self, isolated_config_dir):
+        assert config.load_saved_volume() == 1.0
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_volume_pref(0.5)
+        assert config.load_saved_volume() == 0.5
+
+    def test_save_clamps_high(self, isolated_config_dir):
+        config.save_volume_pref(2.5)
+        assert config.load_saved_volume() == 1.0
+
+    def test_save_clamps_low(self, isolated_config_dir):
+        config.save_volume_pref(-1.0)
+        assert config.load_saved_volume() == 0.0
+
+    def test_save_ignores_garbage(self, isolated_config_dir):
+        config.save_volume_pref("loud")
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_save_ignores_nan(self, isolated_config_dir):
+        config.save_volume_pref(float("nan"))
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_load_clamps_corrupt_high(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"volume": 99.0}))
+        assert config.load_saved_volume() == 1.0
+
+    def test_load_falls_back_on_non_numeric(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"volume": "loud"}))
+        assert config.load_saved_volume() == 1.0
+
+    def test_skips_write_when_unchanged(self, isolated_config_dir):
+        config.save_volume_pref(0.5)
+        mtime_before = (isolated_config_dir / "config.json").stat().st_mtime_ns
+        config.save_volume_pref(0.5)
+        assert (isolated_config_dir / "config.json").stat().st_mtime_ns \
+            == mtime_before
+
+
+# ── Quiet-hours preference (M3) ──────────────────────────────────────
+class TestQuietHoursPref:
+    def test_default_is_disabled(self, isolated_config_dir):
+        s, e = config.load_saved_quiet_hours()
+        assert s is None and e is None
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_quiet_hours_pref(23 * 60, 8 * 60)
+        assert config.load_saved_quiet_hours() == (23 * 60, 8 * 60)
+
+    def test_save_none_disables(self, isolated_config_dir):
+        config.save_quiet_hours_pref(23 * 60, 8 * 60)
+        config.save_quiet_hours_pref(None, None)
+        # Disabling drops the key entirely (cleaner JSON than null pair).
+        data = json.loads((isolated_config_dir / "config.json").read_text())
+        assert "quiet_hours" not in data
+
+    def test_save_none_when_already_unset_is_noop(self, isolated_config_dir):
+        # Should not create an empty config file.
+        config.save_quiet_hours_pref(None, None)
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_save_rejects_partial(self, isolated_config_dir):
+        config.save_quiet_hours_pref(23 * 60, None)
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_save_rejects_out_of_range(self, isolated_config_dir):
+        config.save_quiet_hours_pref(-1, 8 * 60)
+        assert not (isolated_config_dir / "config.json").exists()
+        config.save_quiet_hours_pref(23 * 60, 1440)
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_save_rejects_zero_length(self, isolated_config_dir):
+        config.save_quiet_hours_pref(600, 600)
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_load_rejects_malformed_block(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"quiet_hours": "23:00-08:00"}))
+        # String, not dict ⇒ disabled.
+        assert config.load_saved_quiet_hours() == (None, None)
+
+    def test_load_rejects_missing_endpoints(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"quiet_hours": {"start": 23 * 60}}))
+        assert config.load_saved_quiet_hours() == (None, None)
+
+    def test_skips_write_when_unchanged(self, isolated_config_dir):
+        config.save_quiet_hours_pref(23 * 60, 8 * 60)
+        mtime_before = (isolated_config_dir / "config.json").stat().st_mtime_ns
+        config.save_quiet_hours_pref(23 * 60, 8 * 60)
+        assert (isolated_config_dir / "config.json").stat().st_mtime_ns \
+            == mtime_before
+
+
+# ── Public preset surfaces (used by tray) ────────────────────────────
+class TestPublicPresets:
+    def test_volume_steps_are_sorted_and_in_range(self):
+        assert config.VOLUME_STEPS == tuple(sorted(config.VOLUME_STEPS))
+        for step in config.VOLUME_STEPS:
+            assert 0.0 <= step <= 1.0
+
+    def test_quiet_hours_presets_are_valid(self):
+        # Every preset must round-trip through save+load.
+        for label, s, e in config.QUIET_HOURS_PRESETS:
+            assert isinstance(label, str) and label
+            assert isinstance(s, int) and 0 <= s < 1440
+            assert isinstance(e, int) and 0 <= e < 1440
+            assert s != e

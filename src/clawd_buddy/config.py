@@ -127,3 +127,119 @@ def save_sound_pack_pref(pack):
     cfg["sound_pack"] = pack
     cfg.pop("sound", None)
     save_config(cfg)
+
+
+# ── M3 prefs: reduce_motion, volume, quiet_hours ─────────────────────
+# Each load_ function tolerates missing / malformed values by returning
+# a safe default — a corrupt config must never block startup or silently
+# mute the buddy. Save_ functions skip writes when the value didn't
+# change, so a tray click that re-selects the current option doesn't
+# rewrite the file.
+
+def load_saved_reduce_motion():
+    """Return the persisted reduce-motion preference, defaulting to
+    False (motion on) so first-run users get the standard experience."""
+    return bool(load_config().get("reduce_motion", False))
+
+
+def save_reduce_motion_pref(enabled):
+    """Persist the reduce-motion toggle. Normalised to plain bool so
+    the JSON file stays clean (no Python `True`/numeric edge cases)."""
+    enabled = bool(enabled)
+    cfg = load_config()
+    if cfg.get("reduce_motion") is enabled:
+        return
+    cfg["reduce_motion"] = enabled
+    save_config(cfg)
+
+
+# Discrete volume steps surfaced in the tray Volume submenu. Stored as
+# a float in config to leave room for a real continuous slider later
+# without a schema migration.
+VOLUME_STEPS = (0.0, 0.25, 0.50, 0.75, 1.00)
+DEFAULT_VOLUME = 1.0
+
+
+def load_saved_volume():
+    """Return the persisted user volume (0.0–1.0). Clamps to range so
+    a hand-edited config can't push pygame's mixer out-of-bounds."""
+    v = load_config().get("volume", DEFAULT_VOLUME)
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return DEFAULT_VOLUME
+    if v != v:  # NaN
+        return DEFAULT_VOLUME
+    return max(0.0, min(1.0, v))
+
+
+def save_volume_pref(v):
+    """Persist the user volume (clamped 0.0–1.0)."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return
+    if v != v:  # NaN
+        return
+    v = max(0.0, min(1.0, v))
+    cfg = load_config()
+    if isinstance(cfg.get("volume"), (int, float)) and float(cfg["volume"]) == v:
+        return
+    cfg["volume"] = v
+    save_config(cfg)
+
+
+# Quiet-hours presets surfaced in the tray. Each entry is
+# (label, start_minutes_from_midnight, end_minutes_from_midnight).
+# "Off" lives outside this list because its endpoints are None.
+QUIET_HOURS_PRESETS = (
+    ("21:00 – 08:00", 21 * 60,  8 * 60),
+    ("22:00 – 08:00", 22 * 60,  8 * 60),
+    ("23:00 – 07:00", 23 * 60,  7 * 60),
+    ("23:00 – 08:00", 23 * 60,  8 * 60),
+    ("00:00 – 09:00",  0,       9 * 60),
+)
+
+
+def load_saved_quiet_hours():
+    """Return (start, end) minutes-from-midnight pair, or (None, None)
+    when quiet hours are disabled / missing / malformed. Quiet hours
+    default to OFF — a brand-new buddy should chirp at the user, not
+    surprise them with silence."""
+    cfg = load_config()
+    raw = cfg.get("quiet_hours")
+    if not isinstance(raw, dict):
+        return None, None
+    s = raw.get("start")
+    e = raw.get("end")
+    if not (isinstance(s, int) and isinstance(e, int)):
+        return None, None
+    if not (0 <= s < 1440 and 0 <= e < 1440):
+        return None, None
+    if s == e:
+        return None, None
+    return s, e
+
+
+def save_quiet_hours_pref(start, end):
+    """Persist a quiet-hours window. Pass (None, None) to disable —
+    the key is dropped from the config in that case rather than left
+    as a null pair, so the JSON stays minimal."""
+    cfg = load_config()
+    if start is None or end is None:
+        if "quiet_hours" not in cfg:
+            return
+        cfg.pop("quiet_hours", None)
+        save_config(cfg)
+        return
+    if not (isinstance(start, int) and isinstance(end, int)):
+        return
+    if not (0 <= start < 1440 and 0 <= end < 1440):
+        return
+    if start == end:
+        return
+    new = {"start": start, "end": end}
+    if cfg.get("quiet_hours") == new:
+        return
+    cfg["quiet_hours"] = new
+    save_config(cfg)
