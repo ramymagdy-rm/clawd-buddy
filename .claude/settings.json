@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clawd-buddy --prompt-start",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
