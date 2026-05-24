@@ -214,6 +214,13 @@ clawd-buddy                  Start buddy on taskbar
 clawd-buddy --test           Start with a celebration animation
 clawd-buddy --send MSG       Signal a running buddy to celebrate
 clawd-buddy --wave           Signal a running buddy to wave (needs attention)
+clawd-buddy --message TEXT   Show a 3s speech bubble with TEXT above the
+                             running buddy. Pass "" to dismiss any
+                             current bubble immediately.
+clawd-buddy --status         Print the running buddy's state as JSON
+                             (version, pid, port, mode, queue depth,
+                             theme, sound pack, bubble, last action)
+                             and exit. Exit 1 if no buddy is listening.
 clawd-buddy --prompt-start   Signal start of a Claude Code prompt — greets
                              on the first prompt of a new session, then
                              enters the thinking animation. Reads
@@ -312,6 +319,31 @@ prompt: the running buddy greets when it sees a *new* `session_id` (or
 when none is supplied and there has been no recent activity) and starts
 the thinking animation either way.
 
+The `status` action is the only one that elicits a response — the
+buddy writes a JSON snapshot back on the same socket before closing:
+
+```bash
+$ clawd-buddy --status
+{
+  "version": "0.1.14",
+  "pid": 12345,
+  "port": 44556,
+  "mode": "idle",
+  "queue_depth": 0,
+  "last_session_id": "abc-123",
+  "last_action": "wave",
+  "last_action_ts": 1716595200.0,
+  "theme": "dark",
+  "sound_pack": "fanfare",
+  "topmost": true,
+  "bubble_text": ""
+}
+```
+
+This is the recommended "is the buddy alive?" probe — exit code 1 plus
+a stderr message when no buddy is listening, exit code 0 with JSON on
+stdout otherwise.
+
 You can send signals from any language:
 
 ```python
@@ -405,6 +437,30 @@ The buddy adds a system tray icon with a right-click menu:
 
 > Reactions are **queued** while another animation is playing — up to
 > three pending events play back in the order they arrived.
+
+### Speech bubble (any tool, via `--message`)
+
+- Triggered by `clawd-buddy --message "TEXT"`
+- Rounded bubble above the buddy's head with a small downward tail
+- Theme-coloured (uses the active theme's screen background + body
+  border + text colour)
+- Word-wrapped to **at most two lines**, anything longer is truncated
+  with an ellipsis
+- Auto-dismisses after **3 seconds**; sending a new message replaces
+  the current one immediately
+- **Independent of the buddy's mode** — bubbles coexist with idle,
+  thinking, greeting, celebrate, and wave animations
+- Silent (the visual is the whole point)
+
+`--message` is the generic display surface — a script, CI job, or any
+other tool can use it to tell you something without writing its own
+notification UI:
+
+```bash
+clawd-buddy --message "tests green"
+clawd-buddy --message "deploy starting…"
+clawd-buddy --message ""              # dismiss any current bubble
+```
 
 ## Configuration
 

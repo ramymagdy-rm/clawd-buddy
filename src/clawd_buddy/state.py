@@ -54,6 +54,16 @@ NEW_SESSION_IDLE_SECONDS = 1800.0
 # tied to their original event.
 QUEUE_MAX = 3
 
+# Default lifetime of a `--message` speech bubble, in seconds. Long
+# enough to read a short status ping, short enough that a stale message
+# clears itself before the next prompt cycle. See
+# .ai/decisions/2026-05-24-milestone-2-buddy-speaks.md.
+DEFAULT_BUBBLE_DUR = 3.0
+
+# Hard cap on bubble text length. Anything longer is truncated with an
+# ellipsis — the bubble is a status ping, not a notification panel.
+MAX_BUBBLE_LEN = 120
+
 
 # Confetti palette — shared across all themes so a celebrate animation
 # is always rainbow-coloured regardless of which theme is active.
@@ -113,6 +123,22 @@ class BuddyState:
         # prompt_start (used for the no-session-id fallback).
         self._last_session_id = None
         self._last_activity_ts = 0.0
+
+        # M2: speech bubble overlay. Independent of `mode` so a bubble
+        # can co-exist with any animation. Empty string = no bubble.
+        self.bubble_text = ""
+        self._bubble_expiry = 0.0
+
+        # M2: last action token dispatched through the IPC layer, with
+        # the wall-clock when it happened. Surfaced via `--status`.
+        self.last_action = None
+        self.last_action_ts = 0.0
+
+        # M2: mirror of whether the window is currently kept on top.
+        # The main loop owns the real pygame/Win32 state and writes it
+        # here so `--status` can report it without the IPC layer reaching
+        # into windowing code.
+        self.topmost = True
 
     # ── Sound ────────────────────────────────────────────────────
     @property
@@ -202,6 +228,36 @@ class BuddyState:
         rarely need this directly."""
         self._request("end_thinking")
 
+    def set_message(self, text, duration=DEFAULT_BUBBLE_DUR):
+        """Show `text` in a speech bubble above the buddy for `duration`
+        seconds. Replaces any current message (single-slot, no queue).
+
+        Empty / blank input clears the bubble immediately — that matches
+        the user intent of `clawd-buddy --message ""` as a dismiss.
+        Anything past MAX_BUBBLE_LEN is truncated with a single ellipsis;
+        the bubble is a status ping, not a notification panel.
+        """
+        if not isinstance(text, str):
+            return
+        text = text.strip()
+        if not text:
+            self.bubble_text = ""
+            self._bubble_expiry = 0.0
+            return
+        if len(text) > MAX_BUBBLE_LEN:
+            text = text[:MAX_BUBBLE_LEN - 1].rstrip() + "…"
+        self.bubble_text = text
+        self._bubble_expiry = self._clock() + duration
+
+    def record_action(self, action):
+        """Record an IPC action token as the last dispatched action.
+        Used by `--status` so callers can see what the buddy last
+        reacted to without grepping the buddy's stdout."""
+        if not isinstance(action, str) or not action:
+            return
+        self.last_action = action
+        self.last_action_ts = self._clock()
+
     def prompt_start(self, session_id=None):
         """UserPromptSubmit handler — the wire-once Claude Code entry point.
 
@@ -227,9 +283,11 @@ class BuddyState:
 
     # ── Per-frame tick ───────────────────────────────────────────
     def update(self):
-        """Called once per frame. Expires reactive modes and pulls the
-        next queued action; also enforces the thinking safety cap."""
-        elapsed = self._clock() - self.mode_start
+        """Called once per frame. Expires reactive modes, pulls the
+        next queued action, enforces the thinking safety cap, and clears
+        any expired speech bubble."""
+        now = self._clock()
+        elapsed = now - self.mode_start
         if self.mode == "celebrating" and elapsed > self.cel_dur:
             self._advance_from_reactive()
         elif self.mode == "waving" and elapsed > self.wave_dur:
@@ -238,6 +296,10 @@ class BuddyState:
             self._advance_from_reactive()
         elif self.mode == "thinking" and elapsed > MAX_THINKING_SECONDS:
             self._enter("idle")
+
+        if self.bubble_text and now > self._bubble_expiry:
+            self.bubble_text = ""
+            self._bubble_expiry = 0.0
 
     # ── Internal: dispatch / queue ───────────────────────────────
     def _request(self, action, **kwargs):

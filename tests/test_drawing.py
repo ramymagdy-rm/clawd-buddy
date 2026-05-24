@@ -130,3 +130,79 @@ class TestConfettiLifecycle:
             p[1] = WIN_H + 100
         drawing.draw_buddy(surface, 0.0, state, blink=False)
         assert state.confetti == []
+
+
+# ── Speech bubble (M2) ───────────────────────────────────────────────
+class TestSpeechBubble:
+    def test_no_op_for_empty_text(self, surface, state):
+        # draw_speech_bubble shorts on empty/missing text — easiest way
+        # to assert it is to confirm calling draw_buddy without a bubble
+        # leaves the surface in its pre-call state for the bubble region.
+        before = surface.copy()
+        drawing.draw_buddy(surface, 0.0, state, blink=False)
+        # We can't compare entire surfaces (the buddy was drawn), but we
+        # can be sure no crash and bubble_text remained empty.
+        assert state.bubble_text == ""
+        del before  # silence unused-var
+
+    def test_renders_simple_bubble_without_crashing(self, surface, state):
+        state.set_message("hello")
+        drawing.draw_buddy(surface, 0.0, state, blink=False)
+
+    def test_renders_long_text_with_wrap_and_truncate(self, surface, state):
+        long_msg = (
+            "this is a much longer status message than the bubble can show "
+            "in a single line and definitely won't fit on two lines either"
+        )
+        state.set_message(long_msg)
+        drawing.draw_buddy(surface, 0.0, state, blink=False)
+        # The state-level cap ensures the bubble_text fits the contract;
+        # the renderer further truncates visually.
+        assert state.bubble_text  # not cleared
+
+    def test_renders_across_modes(self, surface, state):
+        # Bubbles must coexist with every mode — render path branches on
+        # the active mode, so walk through them all with a bubble.
+        for setter in (lambda s: None, lambda s: s.trigger(),
+                       lambda s: s.wave(), lambda s: s.greet(),
+                       lambda s: s.start_thinking()):
+            fresh = buddy_state.BuddyState(theme_name="dark",
+                                           sound_pack="off")
+            setter(fresh)
+            fresh.set_message("ping")
+            drawing.draw_buddy(surface, 0.0, fresh, blink=False)
+
+    def test_renders_across_themes(self, surface, state):
+        # A theme missing a colour the bubble reads (mouth / screen_bg /
+        # body_outer) would crash here.
+        from clawd_buddy.ui.themes import THEMES
+        state.set_message("ping")
+        for name in THEMES:
+            state.set_theme(name)
+            drawing.draw_buddy(surface, 0.0, state, blink=False)
+
+
+class TestWrapBubbleText:
+    def test_short_text_one_line(self):
+        font = drawing._bubble_font()
+        lines = drawing._wrap_bubble_text(font, "hi", 200)
+        assert lines == ["hi"]
+
+    def test_empty_returns_empty_list(self):
+        font = drawing._bubble_font()
+        assert drawing._wrap_bubble_text(font, "", 200) == []
+
+    def test_caps_at_max_lines(self):
+        font = drawing._bubble_font()
+        # Force narrow line budget so every word goes on its own line.
+        narrow = font.size("xxx")[0] + 1
+        lines = drawing._wrap_bubble_text(
+            font, "one two three four five", narrow, max_lines=2)
+        assert len(lines) <= 2
+
+    def test_overflowing_final_line_ends_with_ellipsis(self):
+        font = drawing._bubble_font()
+        narrow = font.size("xxx")[0] + 1
+        lines = drawing._wrap_bubble_text(
+            font, "one two three four five", narrow, max_lines=2)
+        assert lines[-1].endswith("…")

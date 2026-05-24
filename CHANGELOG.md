@@ -4,6 +4,58 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.14] - 2026-05-24
+
+### Added — Milestone 2: Buddy speaks
+
+- **`--message "TEXT"` CLI flag** — show a small speech bubble above
+  the running buddy for ~3 seconds. The bubble is **independent of the
+  buddy's animation mode** — it coexists with idle, thinking, greeting,
+  celebrate, and wave — so anything (scripts, CI jobs, other tools) can
+  pop a short status ping without preempting an in-flight animation.
+  Word-wrapped to two lines max, truncated with an ellipsis past that.
+  Sending a new message replaces the current one. Pass `""` to dismiss
+  any active bubble immediately.
+- **`--status` CLI flag** — print the running buddy's state as JSON and
+  exit. Fields: `version`, `pid`, `port`, `mode`, `queue_depth`,
+  `last_session_id`, `last_action`, `last_action_ts`, `theme`,
+  `sound_pack`, `topmost`, `bubble_text`. Exit code 1 if no buddy is
+  listening on the port — this is now the recommended "is the buddy
+  alive?" probe, replacing the older "try `--send` and check the exit
+  code" hack.
+- **`message` socket action** — same payload as `--message`, fire-and-
+  forget, slots into the existing JSON-over-TCP protocol.
+- **`status` socket action** — the first **request/response** action on
+  the buddy's protocol. The server writes the JSON snapshot back on the
+  same socket before closing; every other action stays fire-and-forget.
+- **`request_status()` client helper** in `clawd_buddy.ipc` — the
+  request/response twin of `send_signal()`. Returns the parsed dict or
+  `None` if no buddy is listening.
+
+### Changed
+
+- `BuddyState` gains a small surface for the new features: `bubble_text`
+  / `_bubble_expiry` for the speech bubble, `last_action` /
+  `last_action_ts` populated by `dispatch_action`, and a `topmost`
+  mirror written by the main loop so `--status` can report it without
+  the IPC layer reaching into pygame / windowing code. `update()` now
+  also clears expired bubbles each frame.
+- `dispatch_action` now records every dispatched action on `state`
+  (unknown actions are recorded as `celebrate`, matching the existing
+  backward-compat fall-through). `KNOWN_ACTIONS` gains `message` and
+  `status`.
+
+### Documentation
+
+- `.ai/decisions/2026-05-24-milestone-2-buddy-speaks.md` — full design
+  rationale (bubble-as-overlay vs reactive mode, request/response
+  protocol convention, truncation strategy, deferred alternatives).
+- `README.md` updated: new **Speech bubble** animation section, new
+  CLI reference rows for `--message` / `--status`, **Signal protocol**
+  section now documents the `status` request/response.
+- `.ai/feature-map.md` and `.ai/roadmap.md` — M2 entries marked
+  shipped.
+
 ## [0.1.13] - 2026-05-24
 
 ### Removed
