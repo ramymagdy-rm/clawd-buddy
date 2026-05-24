@@ -41,6 +41,8 @@ import ctypes
 import argparse
 import shutil
 
+from . import __version__ as APP_VERSION
+
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 # Force X11 on Linux — Wayland restricts window positioning & always-on-top
@@ -1494,6 +1496,8 @@ def _create_tray_impl(state):
         pystray.MenuItem("Bring to Front", on_bring_to_front),
         pystray.MenuItem("Theme", theme_submenu),
         pystray.MenuItem("Sound", sound_submenu),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem(f"Clawd Buddy v{APP_VERSION}", None, enabled=False),
         pystray.MenuItem("Quit", on_quit),
     )
     pystray.Icon("clawd-buddy", img, "Clawd Buddy", menu).run()
@@ -1519,6 +1523,9 @@ def parse_args():
             "  clawd-buddy --no-startup   Remove from login/startup\n"
         ),
     )
+    p.add_argument("--version", action="version",
+                   version=f"%(prog)s {APP_VERSION}",
+                   help="Show version and exit")
     p.add_argument("--port", type=int, default=SOCK_PORT,
                    help=f"TCP port (default: {SOCK_PORT})")
     p.add_argument("--no-topmost", action="store_true",

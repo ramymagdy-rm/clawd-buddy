@@ -4,6 +4,26 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`--version` CLI flag** — `clawd-buddy --version` prints the package
+  version (e.g. `clawd-buddy 0.1.9`) and exits. Powered by argparse's
+  built-in version action.
+- **Tray "About" entry** — disabled informational item `Clawd Buddy vX.Y.Z`
+  above **Quit** so the running version is visible without dropping to a
+  shell.
+- **`__version__` on the package** — `from clawd_buddy import __version__`
+  exposes the version string, sourced from `importlib.metadata` so
+  `pyproject.toml` stays the single source of truth (with a `0.0.0+source`
+  fallback for raw source-tree runs).
+- **`.bumpversion.toml`** at the repo root — `bump-my-version` config that
+  bumps `pyproject.toml`'s `version` field. Configured with
+  `commit = false`, `tag = false`, `allow_dirty = true` so the tool
+  edits files only; commits, tags, and merges stay in your hands. See
+  the updated **Releasing** section of `CONTRIBUTING.md` for the new flow.
+
 ## [0.1.9] - 2026-05-24
 
 ### Added

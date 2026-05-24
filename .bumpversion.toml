@@ -1,0 +1,26 @@
+[tool.bumpversion]
+current_version = "0.1.9"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+search = "{current_version}"
+replace = "{new_version}"
+regex = false
+ignore_missing_version = false
+tag = false
+sign_tags = false
+tag_name = "v{new_version}"
+tag_message = "Bump version: {current_version} → {new_version}"
+allow_dirty = true
+commit = false
+message = "Bump version: {current_version} → {new_version}"
+commit_args = ""
+
+# pyproject.toml's `version = "X.Y.Z"` under [project] is the runtime source
+# of truth — `importlib.metadata.version("clawd-buddy")` reads it. The
+# search pattern is anchored to the leading `version = "..."` form so it
+# only matches the [project] field, never accidentally matching a substring
+# like `current_version = "..."` in this very file.
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
