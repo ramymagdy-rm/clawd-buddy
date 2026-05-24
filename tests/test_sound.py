@@ -144,3 +144,65 @@ class TestPackBuilders:
         # a broken pack (same sound for both events).
         cel_fn, wav_fn = sound.SOUND_PACKS[pack]
         assert cel_fn() != wav_fn()
+
+
+# ── Volume application (M3) ──────────────────────────────────────────
+class _FakeSound:
+    """Stand-in for `pygame.mixer.Sound` — only `set_volume` is exercised
+    by `apply_volume`. Lets us test the volume wiring without standing
+    up the real audio mixer."""
+
+    def __init__(self):
+        self.volume = None
+
+    def set_volume(self, v):
+        self.volume = v
+
+
+class TestApplyVolume:
+    def test_base_volumes_have_known_levels(self):
+        # The per-event base levels are intentionally distinct so the
+        # quieter wave doesn't overlap the louder celebrate.
+        assert sound.BASE_VOLUMES["celebrate"] > sound.BASE_VOLUMES["wave"]
+        for v in sound.BASE_VOLUMES.values():
+            assert 0.0 < v <= 1.0
+
+    def test_apply_volume_scales_each_pack(self):
+        packs = {
+            "fanfare": (_FakeSound(), _FakeSound()),
+            "chime": (_FakeSound(), _FakeSound()),
+        }
+        sound.apply_volume(packs, 0.5)
+        for cel, wav in packs.values():
+            assert cel.volume == sound.BASE_VOLUMES["celebrate"] * 0.5
+            assert wav.volume == sound.BASE_VOLUMES["wave"] * 0.5
+
+    def test_apply_volume_at_zero_mutes(self):
+        packs = {"fanfare": (_FakeSound(), _FakeSound())}
+        sound.apply_volume(packs, 0.0)
+        cel, wav = packs["fanfare"]
+        assert cel.volume == 0.0
+        assert wav.volume == 0.0
+
+    def test_apply_volume_clamps_high(self):
+        packs = {"fanfare": (_FakeSound(), _FakeSound())}
+        sound.apply_volume(packs, 5.0)
+        cel, _ = packs["fanfare"]
+        assert cel.volume == sound.BASE_VOLUMES["celebrate"]  # clamped to 1.0
+
+    def test_apply_volume_clamps_low(self):
+        packs = {"fanfare": (_FakeSound(), _FakeSound())}
+        sound.apply_volume(packs, -1.0)
+        cel, _ = packs["fanfare"]
+        assert cel.volume == 0.0
+
+    def test_apply_volume_garbage_is_noop(self):
+        packs = {"fanfare": (_FakeSound(), _FakeSound())}
+        sound.apply_volume(packs, "loud")
+        cel, _ = packs["fanfare"]
+        assert cel.volume is None  # set_volume not called
+
+    def test_apply_volume_empty_dict_does_not_raise(self):
+        # Headless / mixer-init-failed path returns an empty dict —
+        # apply_volume on it must be a clean no-op.
+        sound.apply_volume({}, 0.7)

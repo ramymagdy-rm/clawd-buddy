@@ -182,6 +182,44 @@ class TestSpeechBubble:
             drawing.draw_buddy(surface, 0.0, state, blink=False)
 
 
+# ── Reduce-motion rendering (M3) ─────────────────────────────────────
+class TestReduceMotionRendering:
+    """Pixel-accurate motion is hard to assert, but we can pin the two
+    invariants that matter: reduce-motion (a) doesn't crash for any
+    mode, and (b) skips confetti spawning so the celebrate animation
+    runs without the particle swarm."""
+
+    @pytest.mark.parametrize(
+        "set_mode",
+        [
+            lambda s: None,
+            lambda s: s.trigger(),
+            lambda s: s.wave(),
+            lambda s: s.greet(),
+            lambda s: s.start_thinking(),
+        ],
+        ids=["idle", "celebrating", "waving", "greeting", "thinking"],
+    )
+    def test_does_not_crash_with_reduce_motion(self, surface, clock, set_mode):
+        s = buddy_state.BuddyState(theme_name="dark", sound_pack="off",
+                                   clock=clock, reduce_motion=True)
+        set_mode(s)
+        drawing.draw_buddy(surface, 1.0, s, blink=False)
+
+    def test_celebrate_skips_confetti_spawn(self, clock):
+        s = buddy_state.BuddyState(theme_name="dark", sound_pack="off",
+                                   clock=clock, reduce_motion=True)
+        s.trigger()
+        assert s.confetti == []
+
+    def test_render_with_bubble_and_reduce_motion(self, surface, clock):
+        s = buddy_state.BuddyState(theme_name="dark", sound_pack="off",
+                                   clock=clock, reduce_motion=True)
+        s.set_message("ping")
+        s.start_thinking()
+        drawing.draw_buddy(surface, 1.0, s, blink=False)
+
+
 class TestWrapBubbleText:
     def test_short_text_one_line(self):
         font = drawing._bubble_font()

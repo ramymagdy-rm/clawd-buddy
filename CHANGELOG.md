@@ -4,6 +4,78 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.15] - 2026-05-25
+
+### Fixed — thinking animation no longer drops after an attention cue
+
+- The buddy used to fall back to **idle** once a wave (yellow border)
+  or a greet animation cleared, even if Claude was still working.
+  `BuddyState` now tracks a `_resume_thinking` flag set when a wave or
+  greet preempts thinking — the flag survives chained reactives and
+  is cleared by `celebrate` (`Stop` ends thinking) or explicit
+  `end_thinking`. Result: thinking now resumes after every wave /
+  greet until the next `Stop` arrives, matching what users expected
+  during a long permission-heavy session.
+
+### Added — Milestone 3: Comfortable & accessible
+
+- **Reduce Motion toggle** (system-tray menu). When checked, drawing
+  skips bobbing, limb swings, confetti, and ambient pupil / mouth
+  animation. The attention border and notification sounds stay —
+  per the roadmap's accessibility goal ("border + sound only, no
+  bobbing/confetti"). Persists in `config.json` under `reduce_motion`.
+- **Volume submenu** (system-tray → **Sound** → **Volume**). Discrete
+  `0% / 25% / 50% / 75% / 100%` steps multiply each pack's per-event
+  base level. Picking a step previews the celebrate sound at the new
+  volume. Stored as a float under `volume` in `config.json` so a
+  future continuous slider can read the same file.
+- **Quiet Hours submenu** (system-tray → **Sound** → **Quiet Hours**).
+  `Off` plus five preset night windows (21:00–08:00, 22:00–08:00,
+  23:00–07:00, 23:00–08:00, 00:00–09:00). When the local time falls
+  inside the window, every notification sound is muted — animations
+  still play (quiet hours are about audio comfort, not hiding the
+  visual signal). Schedule wraps across midnight. Stored under
+  `quiet_hours: {start, end}` (minutes-from-midnight) in
+  `config.json`; omitted entirely when disabled.
+- **`--status` payload** gains three fields: `reduce_motion` (bool),
+  `volume` (float, 3-decimal rounded), and `quiet_hours` (either
+  `null` or `{"start": "HH:MM", "end": "HH:MM"}` — the HH:MM strings
+  are easier to read at a glance than minute offsets).
+
+### Changed
+
+- `BuddyState.__init__` accepts new keyword arguments `reduce_motion`,
+  `volume`, `quiet_start`, `quiet_end`. Defaults preserve current
+  behaviour (motion on, volume 1.0, quiet hours disabled). Setters
+  (`set_reduce_motion`, `set_volume`, `set_quiet_hours`) clamp and
+  validate the same way the constructor does.
+- `BuddyState._volume_changed` is a new dirty flag (mirrors the
+  `_scale_changed` pattern) — the main loop watches it and re-applies
+  the per-pack volume to every cached `pygame.mixer.Sound` so the
+  mixer stays single-threaded.
+- `clawd_buddy.ui.sound` exposes `apply_volume(sounds_by_pack, vol)`
+  and `BASE_VOLUMES`. `init_sounds()` now takes a `user_volume`
+  keyword and applies it once before returning, so first-frame
+  playback already respects the saved preference.
+- `clawd_buddy.config` adds `load_saved_reduce_motion` /
+  `save_reduce_motion_pref`, `load_saved_volume` / `save_volume_pref`,
+  `load_saved_quiet_hours` / `save_quiet_hours_pref`, plus public
+  `VOLUME_STEPS` and `QUIET_HOURS_PRESETS` tables used by the tray.
+
+### Documentation
+
+- `.ai/decisions/2026-05-25-milestone-3-comfortable-and-accessible.md`
+  — design note covering the resume-thinking flag, the
+  reduce-motion scope ("border + sound only"), why volume + quiet
+  hours live in submenus (no native pystray slider), why quiet hours
+  gate at *play* time rather than at *trigger* time, and the
+  `_in_quiet_window` wraparound math.
+- `README.md` — new **Comfort & accessibility** section; tray menu
+  list updated; `--status` example updated with the three new
+  fields.
+- `.ai/feature-map.md` and `.ai/roadmap.md` — M3 entries marked
+  shipped.
+
 ## [0.1.14] - 2026-05-24
 
 ### Added — Milestone 2: Buddy speaks

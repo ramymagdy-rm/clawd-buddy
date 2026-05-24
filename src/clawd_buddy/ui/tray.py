@@ -18,7 +18,15 @@ import time
 import traceback
 
 from .. import __version__ as APP_VERSION
-from ..config import save_sound_pack_pref, save_theme_pref
+from ..config import (
+    QUIET_HOURS_PRESETS,
+    VOLUME_STEPS,
+    save_quiet_hours_pref,
+    save_reduce_motion_pref,
+    save_sound_pack_pref,
+    save_theme_pref,
+    save_volume_pref,
+)
 from .about import _make_buddy_icon_image, show_about_dialog
 from .sound import SOUND_PACK_NAMES, SOUND_PACK_OFF
 from .themes import THEME_NAMES
@@ -133,16 +141,89 @@ def _create_tray_impl(state):
             radio=True,
         )
 
+    # M3: Volume submenu — discrete steps surfaced inside Sound, per the
+    # roadmap ("Volume slider in the tray Sound submenu"). pystray has
+    # no native slider widget, so stepped radios are the closest fit.
+    # Selecting a step previews via state.set_volume → _pending_sound,
+    # so the user hears the new level immediately.
+    def _make_volume_action(step):
+        def _action(_icon, _item):
+            state.set_volume(step)
+            save_volume_pref(step)
+        return _action
+
+    def _make_volume_checker(step):
+        def _checker(_item):
+            return abs(state.volume - step) < 1e-3
+        return _checker
+
+    def _volume_item(step):
+        return pystray.MenuItem(
+            f"{int(round(step * 100))}%",
+            _make_volume_action(step),
+            checked=_make_volume_checker(step),
+            radio=True,
+        )
+
+    volume_submenu = pystray.Menu(*[_volume_item(s) for s in VOLUME_STEPS])
+
+    # M3: Quiet Hours submenu — Off + a handful of common night windows.
+    # Stored start/end as minutes-from-midnight; the "Off" item passes
+    # (None, None) to disable the window without removing the menu.
+    def _make_quiet_action(s, e):
+        def _action(_icon, _item):
+            state.set_quiet_hours(s, e)
+            save_quiet_hours_pref(s, e)
+        return _action
+
+    def _make_quiet_checker(s, e):
+        def _checker(_item):
+            return state.quiet_start == s and state.quiet_end == e
+        return _checker
+
+    def _quiet_item(label, s, e):
+        return pystray.MenuItem(
+            label,
+            _make_quiet_action(s, e),
+            checked=_make_quiet_checker(s, e),
+            radio=True,
+        )
+
+    quiet_submenu = pystray.Menu(
+        _quiet_item("Off", None, None),
+        *[_quiet_item(label, s, e)
+          for label, s, e in QUIET_HOURS_PRESETS],
+    )
+
     sound_submenu = pystray.Menu(
         _pack_item(SOUND_PACK_OFF, "Off"),
         *[_pack_item(name, name.title()) for name in SOUND_PACK_NAMES],
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Volume", volume_submenu),
+        pystray.MenuItem("Quiet Hours", quiet_submenu),
     )
+
+    # M3: Reduce Motion — top-level toggle (it's an accessibility
+    # preference, not a sound preference). Closure factory keeps
+    # pystray's arity check happy.
+    def on_reduce_motion(_icon, item):
+        new_val = not bool(item.checked)
+        state.set_reduce_motion(new_val)
+        save_reduce_motion_pref(new_val)
+
+    def _reduce_motion_checker(_item):
+        return state.reduce_motion
 
     menu = pystray.Menu(
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),
         pystray.MenuItem("Theme", theme_submenu),
         pystray.MenuItem("Sound", sound_submenu),
+        pystray.MenuItem(
+            "Reduce Motion",
+            on_reduce_motion,
+            checked=_reduce_motion_checker,
+        ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Clawd Buddy v{APP_VERSION}", None, enabled=False),
         pystray.MenuItem("About", on_about),
