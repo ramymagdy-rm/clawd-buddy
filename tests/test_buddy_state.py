@@ -14,7 +14,7 @@ behind the behaviors covered here.
 
 import pytest
 
-from clawd_buddy import app
+from clawd_buddy import state as buddy_state
 
 
 # ── Test helpers ─────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ def clock():
 def state(clock):
     # sound_pack="off" so transitions don't leave _pending_sound set —
     # easier to assert on pristine state.
-    return app.BuddyState(theme_name="dark", sound_pack="off", clock=clock)
+    return buddy_state.BuddyState(theme_name="dark", sound_pack="off", clock=clock)
 
 
 # ── Initial state ────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ class TestQueue:
         state.trigger()
         for _ in range(10):
             state.wave()  # all but the first three should be dropped
-        assert state.queue_depth == app.QUEUE_MAX
+        assert state.queue_depth == buddy_state.QUEUE_MAX
 
     def test_start_thinking_dedupes_against_tail(self, state):
         state.trigger()
@@ -204,13 +204,13 @@ class TestExpiration:
     def test_thinking_safety_cap(self, state, clock):
         """If Stop never arrives, thinking should eventually self-recover."""
         state.start_thinking()
-        clock.advance(app.MAX_THINKING_SECONDS + 1)
+        clock.advance(buddy_state.MAX_THINKING_SECONDS + 1)
         state.update()
         assert state.mode == "idle"
 
     def test_thinking_does_not_expire_before_cap(self, state, clock):
         state.start_thinking()
-        clock.advance(app.MAX_THINKING_SECONDS - 1)
+        clock.advance(buddy_state.MAX_THINKING_SECONDS - 1)
         state.update()
         assert state.mode == "thinking"
 
@@ -267,7 +267,7 @@ class TestPromptStart:
         state.update()
         state.end_thinking()
         # Long gap — looks like a brand-new session.
-        clock.advance(app.NEW_SESSION_IDLE_SECONDS + 1.0)
+        clock.advance(buddy_state.NEW_SESSION_IDLE_SECONDS + 1.0)
         state.prompt_start()
         assert state.mode == "greeting"
 
@@ -275,7 +275,7 @@ class TestPromptStart:
 # ── Sound pack interaction ───────────────────────────────────────────
 class TestSoundIntegration:
     def test_celebrate_queues_sound_when_pack_enabled(self, clock):
-        s = app.BuddyState(sound_pack="fanfare", clock=clock)
+        s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock)
         s.trigger()
         assert s._pending_sound == "celebrate"
 
@@ -286,11 +286,11 @@ class TestSoundIntegration:
 
     def test_greet_does_not_emit_sound(self, clock):
         # M1 decision: greet is silent in this milestone.
-        s = app.BuddyState(sound_pack="fanfare", clock=clock)
+        s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock)
         s.greet()
         assert s._pending_sound is None
 
     def test_thinking_does_not_emit_sound(self, clock):
-        s = app.BuddyState(sound_pack="fanfare", clock=clock)
+        s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock)
         s.start_thinking()
         assert s._pending_sound is None
