@@ -141,6 +141,17 @@ def dispatch_action(state, action, payload=None):
     return action in KNOWN_ACTIONS
 
 
+def _format_hhmm(minutes):
+    """Render `minutes`-from-midnight (0..1439) as "HH:MM". Returns None
+    if the input isn't a usable int — used inside the quiet-hours
+    block of the status response."""
+    if not isinstance(minutes, int):
+        return None
+    if not (0 <= minutes < 1440):
+        return None
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
 def build_status_response(state, port=SOCK_PORT, topmost=True):
     """Snapshot the running buddy's state as a JSON-serialisable dict.
 
@@ -149,7 +160,20 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
     pygame-/socket-free for testability). `last_action_ts` is `None`
     until the first action lands; callers can use that to tell a fresh
     buddy from a long-running one.
+
+    M3: `reduce_motion`, `volume`, and `quiet_hours` reflect the
+    accessibility / comfort prefs. `quiet_hours` is `null` when
+    disabled, or `{"start": "HH:MM", "end": "HH:MM"}` when set — the
+    HH:MM strings are easier to eyeball than minutes-from-midnight in
+    a CLI dump.
     """
+    if state.quiet_start is None or state.quiet_end is None:
+        quiet_block = None
+    else:
+        quiet_block = {
+            "start": _format_hhmm(state.quiet_start),
+            "end": _format_hhmm(state.quiet_end),
+        }
     return {
         "version": __version__,
         "pid": os.getpid(),
@@ -164,6 +188,9 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "sound_pack": state.sound_pack,
         "topmost": bool(topmost),
         "bubble_text": state.bubble_text,
+        "reduce_motion": bool(state.reduce_motion),
+        "volume": round(float(state.volume), 3),
+        "quiet_hours": quiet_block,
     }
 
 

@@ -47,6 +47,31 @@ remembered between launches (saved alongside the theme in `config.json`).
 If your machine has no audio device, the buddy logs a one-line warning and
 runs silently while the visual border still works.
 
+### Comfort & accessibility
+
+Three preferences keep the buddy polite across motion sensitivities,
+audio environments, and quiet hours:
+
+- **Reduce motion** (system-tray → **Reduce Motion** toggle).
+  When on, the buddy stops bobbing, swinging limbs, and spawning
+  confetti. The pulsing colored border and notification sounds remain
+  — the signaling minimum — so you can still tell when Claude is
+  greeting, thinking, waving, or celebrating.
+- **Volume** (system-tray → **Sound** → **Volume**).
+  Discrete steps from **0% to 100%** scale the active pack's per-event
+  base levels (celebrate is intentionally louder than wave). Clicking a
+  level previews the celebrate sound at the new volume.
+- **Quiet hours** (system-tray → **Sound** → **Quiet Hours**).
+  Pick a preset window — typical nights, e.g. `23:00 – 08:00` — and
+  the buddy mutes every notification sound inside the window (the
+  visual animations still play). The schedule wraps across midnight.
+  Choose **Off** to disable.
+
+All three settle into `config.json` under `reduce_motion`, `volume`,
+and `quiet_hours` (`{start, end}` minutes-from-midnight) — the same
+file as the theme and sound pack. Defaults: motion on, volume 100%,
+quiet hours off.
+
 ### Themes
 
 Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
@@ -325,7 +350,7 @@ buddy writes a JSON snapshot back on the same socket before closing:
 ```bash
 $ clawd-buddy --status
 {
-  "version": "0.1.14",
+  "version": "0.1.15",
   "pid": 12345,
   "port": 44556,
   "mode": "idle",
@@ -336,9 +361,15 @@ $ clawd-buddy --status
   "theme": "dark",
   "sound_pack": "fanfare",
   "topmost": true,
-  "bubble_text": ""
+  "bubble_text": "",
+  "reduce_motion": false,
+  "volume": 1.0,
+  "quiet_hours": {"start": "23:00", "end": "08:00"}
 }
 ```
+
+`reduce_motion`, `volume`, and `quiet_hours` were added in v0.1.15.
+`quiet_hours` is `null` when the window is disabled.
 
 This is the recommended "is the buddy alive?" probe — exit code 1 plus
 a stderr message when no buddy is listening, exit code 0 with JSON on
@@ -370,6 +401,9 @@ The buddy adds a system tray icon with a right-click menu:
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
 - **Theme** — pick one of the 8 themes (current one is checked)
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
+  - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
+  - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.
+- **Reduce Motion** — accessibility toggle. When checked, the buddy stops bobbing, swinging limbs, and spawning confetti; the colored attention border and sounds remain.
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
 - **About** — open a small dialog with version, description, author, license, and a clickable repo link
 - **Quit** — close the buddy

@@ -44,7 +44,14 @@ import threading
 import time
 
 from .cli import parse_args, read_hook_stdin
-from .config import load_saved_sound_pack, load_saved_theme, save_theme_pref
+from .config import (
+    load_saved_quiet_hours,
+    load_saved_reduce_motion,
+    load_saved_sound_pack,
+    load_saved_theme,
+    load_saved_volume,
+    save_theme_pref,
+)
 from .constants import FPS, SOCK_PORT, WIN_H, WIN_W
 from .ipc import request_status, send_signal, socket_listener
 from .platform import (
@@ -62,7 +69,7 @@ from .platform import (
 )
 from .state import BuddyState
 from .ui.drawing import draw_buddy
-from .ui.sound import init_sounds
+from .ui.sound import apply_volume, init_sounds
 from .ui.tray import create_tray
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
@@ -197,14 +204,25 @@ def main():
     setup_window(handle, topmost=not args.no_topmost)
 
     topmost = not args.no_topmost
-    state = BuddyState(theme_name=args.theme,
-                       sound_pack=load_saved_sound_pack())
+    # M3: load accessibility / comfort prefs (reduce-motion, volume,
+    # quiet-hours) alongside the existing theme + sound-pack prefs so
+    # the buddy launches with whatever the user last configured.
+    saved_volume = load_saved_volume()
+    saved_quiet_start, saved_quiet_end = load_saved_quiet_hours()
+    state = BuddyState(
+        theme_name=args.theme,
+        sound_pack=load_saved_sound_pack(),
+        reduce_motion=load_saved_reduce_motion(),
+        volume=saved_volume,
+        quiet_start=saved_quiet_start,
+        quiet_end=saved_quiet_end,
+    )
     state.topmost = topmost
 
     # Audio is best-effort: init may fail on headless machines / containers /
     # missing audio device — we still run silently in that case. Every
     # pack's Sound objects are pre-built so tray previews are instant.
-    sounds_by_pack = init_sounds()
+    sounds_by_pack = init_sounds(user_volume=saved_volume)
 
     if args.test:
         state.trigger()
@@ -247,21 +265,34 @@ def main():
             state.topmost = True
             raise_window(handle)
 
+        # M3: tray's Volume submenu mutates state.volume on the tray
+        # thread and flips _volume_changed; the main loop re-applies
+        # the multiplier to every cached pygame Sound. Same pattern
+        # as _scale_changed — keeps mixer access single-threaded.
+        if state._volume_changed:
+            state._volume_changed = False
+            apply_volume(sounds_by_pack, state.volume)
+
         # Drain pending notification sound. Producers (socket listener,
         # tray callbacks, key handler) just set the flag; playback happens
         # on the main thread to keep mixer access single-threaded. We look
         # up the pair for the *current* sound pack so tray previews fire
         # immediately when the user picks a new pack from the submenu.
+        #
+        # M3: skip playback when quiet hours are active. Animation still
+        # plays — quiet hours are about audio comfort, not hiding the
+        # visual signal.
         if state._pending_sound is not None:
             snd_name = state._pending_sound
             state._pending_sound = None
-            pair = sounds_by_pack.get(state.sound_pack)
-            if pair is not None:
-                snd = pair[0] if snd_name == "celebrate" else pair[1]
-                try:
-                    snd.play()
-                except pygame.error as e:
-                    print(f"[buddy] Sound play failed: {e}")
+            if not state.is_quiet_now():
+                pair = sounds_by_pack.get(state.sound_pack)
+                if pair is not None:
+                    snd = pair[0] if snd_name == "celebrate" else pair[1]
+                    try:
+                        snd.play()
+                    except pygame.error as e:
+                        print(f"[buddy] Sound play failed: {e}")
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:

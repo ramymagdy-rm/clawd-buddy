@@ -189,6 +189,7 @@ class TestStatusResponse:
             "version", "pid", "port", "mode", "queue_depth",
             "last_session_id", "last_action", "last_action_ts",
             "theme", "sound_pack", "topmost", "bubble_text",
+            "reduce_motion", "volume", "quiet_hours",
         ):
             assert key in resp, f"missing field: {key}"
 
@@ -223,6 +224,62 @@ class TestStatusResponse:
         # client. Catch that here.
         resp = ipc.build_status_response(state)
         json.dumps(resp)  # raises if not serialisable
+
+    # ── M3 fields ──────────────────────────────────────────────────
+    def test_reduce_motion_default_false(self, state):
+        resp = ipc.build_status_response(state)
+        assert resp["reduce_motion"] is False
+
+    def test_reduce_motion_reflects_state(self, state):
+        state.set_reduce_motion(True)
+        resp = ipc.build_status_response(state)
+        assert resp["reduce_motion"] is True
+
+    def test_volume_default_full(self, state):
+        resp = ipc.build_status_response(state)
+        assert resp["volume"] == 1.0
+
+    def test_volume_reflects_state(self, state):
+        state.set_volume(0.5)
+        resp = ipc.build_status_response(state)
+        assert resp["volume"] == 0.5
+
+    def test_quiet_hours_default_null(self, state):
+        resp = ipc.build_status_response(state)
+        assert resp["quiet_hours"] is None
+
+    def test_quiet_hours_formatted_as_hhmm(self, state):
+        state.set_quiet_hours(23 * 60, 8 * 60)
+        resp = ipc.build_status_response(state)
+        assert resp["quiet_hours"] == {"start": "23:00", "end": "08:00"}
+
+    def test_quiet_hours_handles_midnight(self, state):
+        state.set_quiet_hours(0, 9 * 60)
+        resp = ipc.build_status_response(state)
+        assert resp["quiet_hours"] == {"start": "00:00", "end": "09:00"}
+
+
+class TestFormatHHMM:
+    """The minutes-to-HH:MM helper is small but used in every --status
+    response — pin its boundary behaviour."""
+
+    def test_basic(self):
+        assert ipc._format_hhmm(0) == "00:00"
+        assert ipc._format_hhmm(60) == "01:00"
+        assert ipc._format_hhmm(23 * 60 + 59) == "23:59"
+
+    def test_pads_single_digit(self):
+        assert ipc._format_hhmm(8 * 60) == "08:00"
+        assert ipc._format_hhmm(65) == "01:05"
+
+    def test_rejects_out_of_range(self):
+        assert ipc._format_hhmm(-1) is None
+        assert ipc._format_hhmm(1440) is None
+
+    def test_rejects_non_int(self):
+        assert ipc._format_hhmm("23:00") is None
+        assert ipc._format_hhmm(60.0) is None
+        assert ipc._format_hhmm(None) is None
 
 
 # ── send_signal client ───────────────────────────────────────────────

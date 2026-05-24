@@ -184,12 +184,49 @@ SOUND_PACK_NAMES = list(SOUND_PACKS.keys())        # display order for tray
 SOUND_PACK_CHOICES = [SOUND_PACK_OFF] + SOUND_PACK_NAMES
 
 
-def init_sounds():
+# Per-sound base volumes (the levels each pack was tuned at). The
+# user-facing "volume" preference is a 0.0–1.0 multiplier applied on
+# top — `apply_volume` re-sets every Sound's mixer volume to
+# `base * user_vol`. Exposed as a dict (rather than constants per
+# variant) so future packs can override either value without changing
+# the wiring.
+BASE_VOLUMES = {"celebrate": 0.55, "wave": 0.45}
+
+
+def apply_volume(sounds_by_pack, user_vol):
+    """Re-apply each pack's base volume scaled by `user_vol` (0.0–1.0).
+
+    Called once at startup after init_sounds() and again whenever the
+    user moves the tray Volume submenu. Each pack stores its Sound
+    objects as `(celebrate, wave)` — we walk both and reset the volume
+    on each. No-op when the sounds dict is empty (headless / mixer
+    init failed)."""
+    try:
+        user_vol = float(user_vol)
+    except (TypeError, ValueError):
+        return
+    user_vol = max(0.0, min(1.0, user_vol))
+    for cel, wav in sounds_by_pack.values():
+        try:
+            cel.set_volume(BASE_VOLUMES["celebrate"] * user_vol)
+            wav.set_volume(BASE_VOLUMES["wave"] * user_vol)
+        except Exception:
+            # pygame.Sound.set_volume can raise on a closed mixer; in
+            # that case the next sound is already broken anyway, so we
+            # swallow rather than crash the main loop.
+            pass
+
+
+def init_sounds(user_volume=1.0):
     """Initialise pygame's mixer and pre-build a Sound pair for each pack.
 
     Returns `{pack_name: (celebrate_sound, wave_sound)}`. Empty dict on
     audio init failure (headless / no audio device) — callers should
     treat a missing pack as "silent".
+
+    `user_volume` is the persisted volume multiplier (0.0–1.0) applied
+    to every Sound's base level. Pass it in so first-frame playback
+    already respects the saved preference.
 
     Pre-building every pack at startup keeps tray-menu preview instant
     and avoids audio-thread allocation later. Each pack's PCM is small
@@ -217,9 +254,8 @@ def init_sounds():
         try:
             cel = pygame.mixer.Sound(buffer=cel_fn())
             wav = pygame.mixer.Sound(buffer=wav_fn())
-            cel.set_volume(0.55)
-            wav.set_volume(0.45)
             sounds[pack] = (cel, wav)
         except pygame.error as e:
             print(f"[buddy] Could not build '{pack}' sounds: {e}")
+    apply_volume(sounds, user_volume)
     return sounds
