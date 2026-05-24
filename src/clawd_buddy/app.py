@@ -33,6 +33,7 @@ import os
 import math
 import time
 import json
+import array
 import random
 import threading
 import socket
@@ -766,7 +767,7 @@ def get_bg_fill(theme_name):
 class BuddyState:
     SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0}
 
-    def __init__(self, theme_name="dark"):
+    def __init__(self, theme_name="dark", sound_pack=None):
         self.mode = "idle"
         self.mode_start = 0.0
         self.cel_dur = 5.0
@@ -778,6 +779,31 @@ class BuddyState:
         self.scale = 1.0
         self._scale_changed = False
         self._raise_requested = False
+        # Notification sound — queued from socket / tray / key threads and
+        # consumed by the main loop so mixer.play() only runs on one thread.
+        # `sound_pack` is the chosen profile (SOUND_PACK_OFF means muted).
+        # None defaults to DEFAULT_SOUND_PACK; the constant lives further
+        # down in the file so we resolve it at instantiation time.
+        if sound_pack is None or sound_pack not in SOUND_PACK_CHOICES:
+            sound_pack = DEFAULT_SOUND_PACK
+        self.sound_pack = sound_pack
+        self._pending_sound = None  # "celebrate" | "wave" | None
+
+    @property
+    def sound_enabled(self):
+        return self.sound_pack != SOUND_PACK_OFF
+
+    def set_sound_pack(self, pack):
+        """Switch the active sound pack and queue an immediate preview of
+        the celebrate sound (unless 'off'). Called from the tray menu —
+        previewing right after selection is the whole point of the submenu,
+        per the feature spec.
+        """
+        if pack not in SOUND_PACK_CHOICES:
+            return
+        self.sound_pack = pack
+        if pack != SOUND_PACK_OFF:
+            self._pending_sound = "celebrate"
 
     @property
     def celebrating(self):
@@ -802,11 +828,15 @@ class BuddyState:
         self.mode = "celebrating"
         self.mode_start = time.time()
         self.confetti = _spawn_confetti(40)
+        if self.sound_enabled:
+            self._pending_sound = "celebrate"
 
     def wave(self):
         if self.mode != "celebrating":
             self.mode = "waving"
             self.mode_start = time.time()
+            if self.sound_enabled:
+                self._pending_sound = "wave"
 
     def bring_to_front(self):
         self._raise_requested = True
@@ -827,6 +857,203 @@ def _spawn_confetti(n):
          random.choice(CONFETTI_COLORS), random.randint(3, 6)]
         for _ in range(n)
     ]
+
+
+# ── Sound (procedurally generated) ────────────────────────────────────
+SOUND_SAMPLE_RATE = 22050
+
+
+def _gen_voices(freqs, duration, sample_rate=SOUND_SAMPLE_RATE, fade=0.05,
+                amplitude=8500, shape="sine"):
+    """Stereo int16 interleaved PCM bytes for summed sine OR square voices.
+
+    Single-frequency arg ⇒ a plain tone. Multi-frequency arg ⇒ a chord
+    (waves summed sample-by-sample). Amplitude is divided across voices so
+    the chord doesn't clip. A raised-cosine (Hann-style) envelope smooths
+    attack and release.
+
+    `shape`:
+      - "sine"   — soft, musical (used by fanfare/minimal/wave packs)
+      - "square" — snappy 8-bit character (used by retro pack)
+        Squares peak at ±1 (vs sine's RMS ~0.7) so call with a lower
+        amplitude to avoid sounding much louder than the sine packs.
+
+    Output is interleaved stereo (L,R,L,R,...). pygame's mixer runs in
+    stereo regardless of any `channels=1` hint, so we duplicate each sample
+    into both channels — feeding mono PCM into a stereo mixer plays back
+    at the wrong pitch.
+    """
+    if isinstance(freqs, (int, float)):
+        freqs = (freqs,)
+    n = int(sample_rate * duration)
+    fade_n = max(1, min(int(sample_rate * fade), n // 2))
+    per_voice = amplitude / len(freqs)
+    two_pi_over_rate = 2.0 * math.pi / sample_rate
+    omegas = [two_pi_over_rate * f for f in freqs]
+    is_square = (shape == "square")
+    buf = array.array("h")
+    for i in range(n):
+        if i < fade_n:
+            env = 0.5 * (1.0 - math.cos(math.pi * i / fade_n))
+        elif i > n - fade_n:
+            env = 0.5 * (1.0 - math.cos(math.pi * (n - i) / fade_n))
+        else:
+            env = 1.0
+        s = 0.0
+        if is_square:
+            for omega in omegas:
+                s += 1.0 if math.sin(omega * i) >= 0 else -1.0
+        else:
+            for omega in omegas:
+                s += math.sin(omega * i)
+        sample = int(per_voice * env * s)
+        buf.append(sample)  # L
+        buf.append(sample)  # R
+    return buf.tobytes()
+
+
+def _gen_bell_tone(freq, duration, sample_rate=SOUND_SAMPLE_RATE,
+                   amplitude=10500):
+    """Bell-ish tone: fundamental + 2 harmonics, exponential decay.
+
+    Real bells have inharmonic partials, but summing the fundamental with
+    its 2nd & 3rd harmonics (lower amplitude) plus an exponential-decay
+    envelope is enough to read as 'bell' rather than 'beep'. A tiny linear
+    attack avoids the click that comes from starting at full amplitude.
+    """
+    n = int(sample_rate * duration)
+    decay_rate = 4.0 / duration  # env reaches exp(-4) ≈ 0.018 at end
+    inv_rate = 1.0 / sample_rate
+    omega1 = 2.0 * math.pi * freq * inv_rate
+    omega2 = 2.0 * math.pi * (freq * 2.0) * inv_rate
+    omega3 = 2.0 * math.pi * (freq * 3.0) * inv_rate
+    attack_n = max(1, int(sample_rate * 0.004))
+    buf = array.array("h")
+    for i in range(n):
+        env = math.exp(-decay_rate * i * inv_rate)
+        if i < attack_n:
+            env *= i / attack_n
+        s = (math.sin(omega1 * i) * 0.7
+             + math.sin(omega2 * i) * 0.2
+             + math.sin(omega3 * i) * 0.1)
+        sample = int(amplitude * env * s)
+        buf.append(sample)
+        buf.append(sample)
+    return buf.tobytes()
+
+
+# ── Sound packs ──────────────────────────────────────────────────────
+# Each pack defines a (celebrate, wave) pair of PCM-builder functions.
+# Add a new pack by writing two builders and registering them in
+# SOUND_PACKS — the tray submenu and config persistence will pick it up
+# automatically. PCM is built at startup in init_sounds().
+
+def _pcm_fanfare_celebrate():
+    """Motivational achievement fanfare — C major arpeggio + landing triad."""
+    return (
+        _gen_voices(523, 0.09)
+        + _gen_voices(659, 0.09)
+        + _gen_voices(784, 0.11)
+        + _gen_voices((523, 659, 784), 0.32, fade=0.08, amplitude=11000)
+    )
+
+
+def _pcm_fanfare_wave():
+    """Warm two-note doorbell call (G4 → D4)."""
+    return (
+        _gen_voices(392, 0.18, amplitude=7000)
+        + _gen_voices(294, 0.26, amplitude=7000)
+    )
+
+
+def _pcm_chime_celebrate():
+    """Peaceful two-bell chime, ascending."""
+    return _gen_bell_tone(659, 0.32) + _gen_bell_tone(880, 0.60)
+
+
+def _pcm_chime_wave():
+    """Single lower chime — calm 'someone's at the door' feel."""
+    return _gen_bell_tone(440, 0.55)
+
+
+def _pcm_retro_celebrate():
+    """8-bit coin-pickup flourish — ascending square arpeggio."""
+    sq = {"shape": "square", "amplitude": 5500, "fade": 0.008}
+    return (
+        _gen_voices(523, 0.07, **sq)
+        + _gen_voices(659, 0.07, **sq)
+        + _gen_voices(784, 0.07, **sq)
+        + _gen_voices(1047, 0.16, **sq)
+    )
+
+
+def _pcm_retro_wave():
+    """Two short low-high square blips."""
+    sq = {"shape": "square", "amplitude": 5000, "fade": 0.008}
+    return (
+        _gen_voices(440, 0.07, **sq)
+        + _gen_voices(587, 0.11, **sq)
+    )
+
+
+def _pcm_minimal_celebrate():
+    """Single short soft tone — barely-there acknowledgment."""
+    return _gen_voices(784, 0.13, fade=0.05, amplitude=6500)
+
+
+def _pcm_minimal_wave():
+    """Single short low tone — subtle nudge."""
+    return _gen_voices(523, 0.11, fade=0.05, amplitude=5500)
+
+
+SOUND_PACKS = {
+    "fanfare":  (_pcm_fanfare_celebrate,  _pcm_fanfare_wave),
+    "chime":    (_pcm_chime_celebrate,    _pcm_chime_wave),
+    "retro":    (_pcm_retro_celebrate,    _pcm_retro_wave),
+    "minimal":  (_pcm_minimal_celebrate,  _pcm_minimal_wave),
+}
+SOUND_PACK_NAMES = list(SOUND_PACKS.keys())        # display order for tray
+SOUND_PACK_OFF = "off"
+SOUND_PACK_CHOICES = [SOUND_PACK_OFF] + SOUND_PACK_NAMES
+DEFAULT_SOUND_PACK = "fanfare"
+
+
+def init_sounds():
+    """Initialize the mixer and build a Sound pair for every pack.
+
+    Returns a dict `{pack_name: (celebrate_sound, wave_sound)}` — empty on
+    audio init failure. The caller looks up the current pack at play time;
+    a missing key means 'silent' and is non-fatal.
+
+    Why pre-build every pack instead of lazy-building on selection: each
+    pack's PCM is small (< 100KB) and synthesis is fast, so building all
+    of them once at startup keeps tray-menu preview instant and avoids
+    audio-thread allocation later.
+
+    Mixer note: `pygame.init()` auto-initializes the mixer at its defaults
+    (44100 Hz stereo) before we get here. A bare `mixer.init()` with new
+    params is then a no-op, so we `mixer.quit()` first to force a fresh
+    init at OUR sample rate.
+    """
+    try:
+        if pygame.mixer.get_init() is not None:
+            pygame.mixer.quit()
+        pygame.mixer.init(frequency=SOUND_SAMPLE_RATE, size=-16,
+                          channels=2, buffer=512)
+    except pygame.error as e:
+        print(f"[buddy] Audio init failed, sounds disabled: {e}")
+        return {}
+    sounds = {}
+    for pack, (cel_fn, wav_fn) in SOUND_PACKS.items():
+        try:
+            cel = pygame.mixer.Sound(buffer=cel_fn())
+            wav = pygame.mixer.Sound(buffer=wav_fn())
+            cel.set_volume(0.55)
+            wav.set_volume(0.45)
+            sounds[pack] = (cel, wav)
+        except pygame.error as e:
+            print(f"[buddy] Could not build '{pack}' sounds: {e}")
+    return sounds
 
 
 # ── Drawing ───────────────────────────────────────────────────────────
@@ -954,6 +1181,33 @@ def draw_buddy(surf, t, state, blink):
         pygame.draw.line(surf, th["mouth"],
                          (int(cx - w_m / 2), my),
                          (int(cx + w_m / 2), my), 2)
+
+    # ── Attention border ──────────────────────────────────────────
+    # Pulsing rounded outline framing the body to catch peripheral vision.
+    # Green = celebrating (done), yellow = waving (attention needed).
+    # Fixed colors instead of theme accents so the meaning is consistent
+    # across all 8 themes.
+    if cel or wav:
+        if cel:
+            border_color = (80, 220, 110)   # bright green
+            pulse_speed = 6.0
+        else:
+            border_color = (255, 215, 60)   # warm yellow
+            pulse_speed = 4.0
+        pulse = (math.sin(t * pulse_speed) + 1) / 2  # 0..1
+        alpha_val = int(60 + 195 * pulse)            # ~60..255
+        pad = 3
+        thick = 3
+        bw = CHAR_W + 2 * pad
+        bh = CHAR_H + 2 * pad
+        border_surf = pygame.Surface((bw + 2 * thick, bh + 2 * thick),
+                                     pygame.SRCALPHA)
+        pygame.draw.rect(
+            border_surf, (*border_color, alpha_val),
+            (0, 0, bw + 2 * thick, bh + 2 * thick),
+            width=thick, border_radius=11,
+        )
+        surf.blit(border_surf, (bx - pad - thick, by - pad - thick))
 
     # ── Attention indicator ───────────────────────────────────────
     if wav:
@@ -1083,6 +1337,41 @@ def save_theme_pref(name):
     save_config(cfg)
 
 
+def load_saved_sound_pack():
+    """Return the last remembered sound-pack name.
+
+    Defaults to DEFAULT_SOUND_PACK on first run / corrupt config so the
+    buddy still chirps out of the box. Also migrates the legacy
+    `sound: bool` key written by an earlier iteration of this feature:
+      sound=False ⇒ "off", sound=True ⇒ DEFAULT_SOUND_PACK.
+    The new key takes precedence if both exist.
+    """
+    cfg = load_config()
+    pack = cfg.get("sound_pack")
+    if isinstance(pack, str) and pack in SOUND_PACK_CHOICES:
+        return pack
+    legacy = cfg.get("sound")
+    if legacy is False:
+        return SOUND_PACK_OFF
+    return DEFAULT_SOUND_PACK
+
+
+def save_sound_pack_pref(pack):
+    """Persist the chosen sound pack. Called from the tray Sound submenu.
+
+    Also strips the legacy `sound: bool` key on first new write so the
+    config doesn't accumulate dead keys after migration.
+    """
+    if pack not in SOUND_PACK_CHOICES:
+        return
+    cfg = load_config()
+    if cfg.get("sound_pack") == pack and "sound" not in cfg:
+        return
+    cfg["sound_pack"] = pack
+    cfg.pop("sound", None)
+    save_config(cfg)
+
+
 # ── System tray ───────────────────────────────────────────────────────
 def _tray_log_path():
     """Per-OS scratch path for tray startup errors."""
@@ -1172,10 +1461,39 @@ def _create_tray_impl(state):
         _theme_item(name) for name in THEME_NAMES
     ])
 
+    # Sound submenu — same factory pattern as the theme submenu so pystray
+    # sees closures with the exact arity its _assert_action expects.
+    # Clicking a pack switches AND previews via state.set_sound_pack,
+    # then persists the choice. "Off" mutes (no preview to play).
+    def _make_pack_action(pack):
+        def _action(_icon, _item):
+            state.set_sound_pack(pack)
+            save_sound_pack_pref(pack)
+        return _action
+
+    def _make_pack_checker(pack):
+        def _checker(_item):
+            return state.sound_pack == pack
+        return _checker
+
+    def _pack_item(pack, label):
+        return pystray.MenuItem(
+            label,
+            _make_pack_action(pack),
+            checked=_make_pack_checker(pack),
+            radio=True,
+        )
+
+    sound_submenu = pystray.Menu(
+        _pack_item(SOUND_PACK_OFF, "Off"),
+        *[_pack_item(name, name.title()) for name in SOUND_PACK_NAMES],
+    )
+
     menu = pystray.Menu(
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),
         pystray.MenuItem("Theme", theme_submenu),
+        pystray.MenuItem("Sound", sound_submenu),
         pystray.MenuItem("Quit", on_quit),
     )
     pystray.Icon("clawd-buddy", img, "Clawd Buddy", menu).run()
@@ -1334,7 +1652,14 @@ def main():
     setup_window(handle, topmost=not args.no_topmost)
 
     topmost = not args.no_topmost
-    state = BuddyState(theme_name=args.theme)
+    state = BuddyState(theme_name=args.theme,
+                       sound_pack=load_saved_sound_pack())
+
+    # Audio is best-effort: init may fail on headless machines / containers /
+    # missing audio device — we still run silently in that case. Every
+    # pack's Sound objects are pre-built so tray previews are instant.
+    sounds_by_pack = init_sounds()
+
     if args.test:
         state.trigger()
 
@@ -1374,6 +1699,22 @@ def main():
             state._raise_requested = False
             topmost = True
             raise_window(handle)
+
+        # Drain pending notification sound. Producers (socket listener,
+        # tray callbacks, key handler) just set the flag; playback happens
+        # on the main thread to keep mixer access single-threaded. We look
+        # up the pair for the *current* sound pack so tray previews fire
+        # immediately when the user picks a new pack from the submenu.
+        if state._pending_sound is not None:
+            snd_name = state._pending_sound
+            state._pending_sound = None
+            pair = sounds_by_pack.get(state.sound_pack)
+            if pair is not None:
+                snd = pair[0] if snd_name == "celebrate" else pair[1]
+                try:
+                    snd.play()
+                except pygame.error as e:
+                    print(f"[buddy] Sound play failed: {e}")
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:

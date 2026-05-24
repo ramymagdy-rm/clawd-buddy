@@ -12,8 +12,33 @@ Clawd Buddy is a small always-on-top character that lives on your taskbar while 
 | State | What happens |
 | --- | --- |
 | **Idle** | Gently bobs, blinks, breathes — your quiet companion |
-| **Assistant finishes** (`Stop` hook) | Celebrates with confetti, happy eyes, and waving arms |
-| **Assistant needs permission** (`PermissionRequest` hook) | Waves at you with a floating **!** so you know to check back |
+| **Assistant finishes** (`Stop` hook) | Celebrates with confetti, happy eyes, waving arms, a short motivational fanfare, and a pulsing **green** border |
+| **Assistant needs permission** (`PermissionRequest` hook) | Waves with a floating **!**, a warm two-note doorbell call, and a pulsing **yellow** border |
+
+### Notification sound packs
+
+Pick the audio style from the system-tray right-click menu → **Sound**.
+Four packs ship in the box, plus an **Off** entry to mute. Clicking a pack
+**previews the celebrate sound immediately** so you can audition options
+without waiting for the next event.
+
+| Pack | Celebrate | Wave |
+| --- | --- | --- |
+| `Fanfare` (default) | Motivational ascending C-major arpeggio that lands on a full triad chord | Warm two-note doorbell (G4 → D4) |
+| `Chime` | Two ascending bell tones with harmonic decay | Single lower bell |
+| `Retro` | 8-bit square-wave coin-pickup flourish (C5 → E5 → G5 → C6) | Two short low-high blips |
+| `Minimal` | Single short soft pip | Single short low pip |
+| `Off` | (silent) | (silent) |
+
+No audio file is bundled — every pack is synthesized at startup with
+`pygame.mixer` (summed sine / square / bell-decay voices with raised-cosine
+envelopes). Your choice persists across launches in `config.json` under
+`"sound_pack"`.
+
+Toggle from the system-tray right-click menu → **Sound**. The choice is
+remembered between launches (saved alongside the theme in `config.json`).
+If your machine has no audio device, the buddy logs a one-line warning and
+runs silently while the visual border still works.
 
 ### Themes
 
@@ -241,6 +266,7 @@ The buddy adds a system tray icon with a right-click menu:
 - **Test Celebration** — trigger the celebrate animation
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
 - **Theme** — pick one of the 8 themes (current one is checked)
+- **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
 - **Quit** — close the buddy
 
 ### Autostart
@@ -268,6 +294,8 @@ The buddy adds a system tray icon with a right-click menu:
 - Both arms waving up
 - Legs kicking
 - Confetti burst (40 particles with gravity and drag)
+- Pulsing **green** border around the body
+- Motivational C-major arpeggio + triad chord (if Sound is enabled)
 - Duration: 3.5 seconds
 
 ### Wave (on `PermissionRequest`)
@@ -277,6 +305,8 @@ The buddy adds a system tray icon with a right-click menu:
 - Surprised "o" mouth
 - Right arm waving high
 - Pulsing floating **!** indicator above head
+- Pulsing **yellow** border around the body
+- Warm two-note doorbell call (if Sound is enabled)
 - Duration: 5 seconds
 
 ## Configuration
