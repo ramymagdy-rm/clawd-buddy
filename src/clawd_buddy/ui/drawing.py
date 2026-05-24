@@ -15,6 +15,133 @@ import pygame
 from ..constants import CHAR_H, CHAR_W, WIN_H, WIN_W
 
 
+# Lazy-initialised font for the speech bubble. We can't build it at
+# module import (pygame.font isn't init'd yet); cache after first use so
+# the per-frame cost is one Font.render call instead of a font lookup.
+_BUBBLE_FONT = None
+_BUBBLE_FONT_SIZE = 13
+
+
+def _bubble_font():
+    """Return (and cache) the speech-bubble font. pygame.font init is
+    idempotent — calling it more than once is cheap."""
+    global _BUBBLE_FONT
+    if _BUBBLE_FONT is None:
+        if not pygame.font.get_init():
+            pygame.font.init()
+        _BUBBLE_FONT = pygame.font.SysFont(None, _BUBBLE_FONT_SIZE + 4)
+    return _BUBBLE_FONT
+
+
+def _wrap_bubble_text(font, text, max_px, max_lines=2):
+    """Word-wrap `text` to fit within `max_px` pixels per line, capped at
+    `max_lines`. Long final line is truncated with an ellipsis.
+
+    Word wrapping is good enough for the bubble's status-ping use case
+    — we don't try to hyphenate single words longer than the line; they
+    overflow and then get truncated by the ellipsis pass.
+    """
+    words = text.split()
+    if not words:
+        return []
+    lines = []
+    current = ""
+    for w in words:
+        candidate = w if not current else f"{current} {w}"
+        if font.size(candidate)[0] <= max_px:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = w
+            if len(lines) >= max_lines:
+                break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    if not lines:
+        return []
+
+    # If the final line still overflows (single mega-word, or the cap
+    # cut us short), trim with an ellipsis until it fits.
+    last = lines[-1]
+    if font.size(last)[0] > max_px or len(lines) == max_lines and len(words) > sum(len(l.split()) for l in lines):
+        # Append ellipsis and trim from the right until it fits.
+        candidate = last + "…"
+        while font.size(candidate)[0] > max_px and len(candidate) > 1:
+            candidate = candidate[:-2] + "…"
+        lines[-1] = candidate
+    return lines
+
+
+def draw_speech_bubble(surf, text, cx, head_top_y, theme):
+    """Draw a rounded speech bubble with a small downward tail above the
+    buddy's head. `cx` is the buddy's horizontal centre; `head_top_y` is
+    the topmost y of the body — the bubble is anchored a few pixels above
+    it. `theme` provides the colours.
+
+    No-op when `text` is empty (callers can pass `state.bubble_text`
+    unconditionally and rely on this short-circuit).
+    """
+    if not text:
+        return
+    font = _bubble_font()
+    pad_x, pad_y = 6, 4
+    margin = 6  # gap between window edge and bubble
+    tail_h = 6
+    max_text_px = WIN_W - 2 * margin - 2 * pad_x
+
+    lines = _wrap_bubble_text(font, text, max_text_px, max_lines=2)
+    if not lines:
+        return
+
+    line_surfs = [font.render(l, True, theme["mouth"]) for l in lines]
+    line_w = max(s.get_width() for s in line_surfs)
+    line_h = line_surfs[0].get_height()
+    bubble_w = line_w + 2 * pad_x
+    bubble_h = line_h * len(line_surfs) + 2 * pad_y
+
+    # Position the bubble centred horizontally, clamped inside the window.
+    bx = int(cx - bubble_w / 2)
+    bx = max(margin, min(bx, WIN_W - margin - bubble_w))
+    by = head_top_y - bubble_h - tail_h - 2
+    # If the bubble would go off the top of the window, clamp it down
+    # — better to overlap the head a little than render off-screen.
+    by = max(margin, by)
+
+    rounded_rect(surf, theme["screen_bg"], (bx, by, bubble_w, bubble_h), 6)
+    pygame.draw.rect(
+        surf, theme["body_outer"], (bx, by, bubble_w, bubble_h),
+        width=1, border_radius=6,
+    )
+
+    # Tail — a small triangle dropping from the bottom-centre toward the
+    # buddy's head. Drawn after the bubble body so the outline overlap is
+    # invisible.
+    tail_top_y = by + bubble_h - 1
+    tail_x = max(bx + 8, min(int(cx), bx + bubble_w - 8))
+    pygame.draw.polygon(
+        surf, theme["screen_bg"],
+        [(tail_x - 5, tail_top_y),
+         (tail_x + 5, tail_top_y),
+         (tail_x, tail_top_y + tail_h)],
+    )
+    # Outline the two diagonal edges (skip the top — covered by bubble).
+    pygame.draw.line(
+        surf, theme["body_outer"],
+        (tail_x - 5, tail_top_y), (tail_x, tail_top_y + tail_h), 1,
+    )
+    pygame.draw.line(
+        surf, theme["body_outer"],
+        (tail_x + 5, tail_top_y), (tail_x, tail_top_y + tail_h), 1,
+    )
+
+    for i, line_surf in enumerate(line_surfs):
+        lx = bx + pad_x + (line_w - line_surf.get_width()) // 2
+        ly = by + pad_y + i * line_h
+        surf.blit(line_surf, (lx, ly))
+
+
 def rounded_rect(surf, color, rect, r):
     """Draw a filled rounded rectangle.
 
@@ -260,6 +387,12 @@ def draw_buddy(surf, t, state, blink):
                 dot_surf, (160, 130, 220, alpha_val), (4, 4), 3,
             )
             surf.blit(dot_surf, (cx + dx - 4, dot_y - 4))
+
+    # ── Speech bubble ─────────────────────────────────────────────
+    # Drawn last (other than confetti) so it sits above the thinking
+    # dots and the attention border, but confetti still rains in front.
+    if state.bubble_text:
+        draw_speech_bubble(surf, state.bubble_text, cx, by, th)
 
     # ── Confetti ──────────────────────────────────────────────────
     alive = []

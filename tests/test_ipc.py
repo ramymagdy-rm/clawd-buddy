@@ -147,7 +147,82 @@ class TestDispatch:
         assert ipc.KNOWN_ACTIONS == {
             "celebrate", "wave", "raise", "quit",
             "prompt_start", "greet", "thinking_start", "thinking_end",
+            "message", "status",
         }
+
+    def test_message_sets_bubble_text(self, state):
+        ipc.dispatch_action(state, "message", {"text": "hello"})
+        assert state.bubble_text == "hello"
+
+    def test_message_missing_text_clears_bubble(self, state):
+        state.set_message("prior")
+        ipc.dispatch_action(state, "message", {})
+        assert state.bubble_text == ""
+
+    def test_status_does_not_mutate_state(self, state):
+        # The listener handles the response; dispatch_action is a no-op
+        # on state for status — but it still records the action.
+        state.trigger()  # something distinctive to confirm we don't reset
+        mode_before = state.mode
+        ipc.dispatch_action(state, "status")
+        assert state.mode == mode_before
+
+    def test_known_action_records_last_action(self, state):
+        ipc.dispatch_action(state, "wave")
+        assert state.last_action == "wave"
+
+    def test_unknown_action_records_celebrate(self, state):
+        # Unknown actions fall through to celebrate per dispatch_action's
+        # backward-compat contract; last_action should reflect that, not
+        # the misspelled token.
+        ipc.dispatch_action(state, "frobnicate")
+        assert state.last_action == "celebrate"
+
+
+# ── build_status_response ────────────────────────────────────────────
+class TestStatusResponse:
+    def test_shape(self, state):
+        resp = ipc.build_status_response(state, port=12345, topmost=True)
+        # Spot-check every documented field — a field disappearing would
+        # be a silent breaking change for any script consuming --status.
+        for key in (
+            "version", "pid", "port", "mode", "queue_depth",
+            "last_session_id", "last_action", "last_action_ts",
+            "theme", "sound_pack", "topmost", "bubble_text",
+        ):
+            assert key in resp, f"missing field: {key}"
+
+    def test_port_is_passed_through(self, state):
+        resp = ipc.build_status_response(state, port=44556)
+        assert resp["port"] == 44556
+
+    def test_topmost_is_passed_through(self, state):
+        resp_on = ipc.build_status_response(state, topmost=True)
+        resp_off = ipc.build_status_response(state, topmost=False)
+        assert resp_on["topmost"] is True
+        assert resp_off["topmost"] is False
+
+    def test_reflects_state_mutations(self, state):
+        state.trigger()
+        state.set_message("ping")
+        ipc.dispatch_action(state, "wave")  # so last_action != None
+        resp = ipc.build_status_response(state)
+        assert resp["mode"] in ("celebrating", "waving")  # depends on preempt
+        assert resp["bubble_text"] == "ping"
+        assert resp["last_action"] == "wave"
+        assert resp["last_action_ts"] is not None
+
+    def test_last_action_ts_is_none_when_no_action_yet(self, state):
+        resp = ipc.build_status_response(state)
+        assert resp["last_action"] is None
+        assert resp["last_action_ts"] is None
+
+    def test_response_is_json_serialisable(self, state):
+        # If something non-JSON sneaks into the response (e.g. a set or
+        # a tuple from a future addition), --status would crash the
+        # client. Catch that here.
+        resp = ipc.build_status_response(state)
+        json.dumps(resp)  # raises if not serialisable
 
 
 # ── send_signal client ───────────────────────────────────────────────
@@ -187,3 +262,37 @@ class TestSendSignal:
                 break
             time.sleep(0.02)
         assert state.waving
+
+
+# ── request_status client ────────────────────────────────────────────
+class TestRequestStatus:
+    def test_no_buddy_returns_none(self):
+        port = _free_port()
+        assert ipc.request_status(port=port, timeout=0.5) is None
+
+    def test_round_trip_returns_status_dict(self, state):
+        port = _free_port()
+        thread = threading.Thread(
+            target=ipc.socket_listener,
+            args=(state,),
+            kwargs={"port": port},
+            daemon=True,
+        )
+        thread.start()
+        # Wait for bind, same probe trick as test_round_trip_with_listener.
+        for _ in range(50):
+            try:
+                with socket.socket() as probe:
+                    probe.settimeout(0.05)
+                    probe.connect(("127.0.0.1", port))
+                break
+            except (ConnectionRefusedError, OSError):
+                time.sleep(0.02)
+        # Put some recognisable state on the buddy first.
+        state.set_message("ping")
+        info = ipc.request_status(port=port, timeout=2.0)
+        assert info is not None
+        assert info["port"] == port
+        assert info["bubble_text"] == "ping"
+        assert info["mode"] in ("idle", "celebrating", "waving", "greeting",
+                                "thinking")
