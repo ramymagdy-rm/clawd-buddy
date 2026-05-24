@@ -68,13 +68,29 @@ Use `--fg` to keep the buddy in the foreground so you can see log output in the 
 ```text
 clawd-buddy/
 ├── src/clawd_buddy/
-│   ├── __init__.py       # Package metadata
-│   └── app.py            # All application code (rendering, state, socket, tray)
+│   ├── __init__.py        # Package metadata (__version__)
+│   ├── app.py             # main() orchestration only
+│   ├── constants.py       # Window dimensions, IPC port, transparency key
+│   ├── state.py           # BuddyState state machine + queue + modes
+│   ├── cli.py             # argparse + read_hook_stdin
+│   ├── config.py          # ~/.config/clawd-buddy persistence
+│   ├── ipc.py             # JSON-over-TCP protocol + dispatcher + client
+│   ├── ui/
+│   │   ├── themes.py      # 8 color theme registry
+│   │   ├── sound.py       # Procedural PCM generators + pack registry
+│   │   ├── drawing.py     # rounded_rect + draw_buddy
+│   │   ├── about.py       # About dialog + shared buddy icon
+│   │   └── tray.py        # pystray icon + right-click menu
+│   └── platform/
+│       ├── __init__.py    # Cross-platform facade
+│       ├── _windows.py    # Win32 ctypes (transparency, taskbar, autostart)
+│       └── _linux.py      # X11 / XDG (window props, panel, .desktop)
+├── tests/                 # One test file per module
 ├── .claude/
-│   ├── settings.json     # Claude Code hook definitions
+│   ├── settings.json      # Claude Code hook definitions
 │   └── commands/
-│       └── buddy.md      # /buddy slash command for Claude Code
-├── pyproject.toml        # Package configuration
+│       └── buddy.md       # /buddy slash command for Claude Code
+├── pyproject.toml         # Package configuration
 ├── README.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
@@ -83,34 +99,52 @@ clawd-buddy/
 
 ## How the code is organized
 
-Everything lives in `app.py` to keep the package simple:
+Each module is focused and independently testable. See
+`.ai/decisions/2026-05-24-app-decomposition.md` for the rationale.
 
-- **Platform helpers** — Windows (`ctypes` win32) and Linux (`ctypes` X11) for transparency, positioning, panel detection
-- **Themes** — `THEMES` dict with `dark` and `light` color palettes
-- **Cross-platform wrappers** — `get_window_handle()`, `setup_window()`, `move_window()`, etc. dispatch to the right platform
-- **State machine** — `BuddyState` with three modes (`idle`, `celebrating`, `waving`), theme, and scale
-- **Drawing** — `draw_buddy()` renders the character on a base surface; the main loop scales it to the window
-- **Socket listener** — TCP server on port 44556, parses JSON `{"action": "..."}` messages
-- **System tray** — `pystray` icon with context menu (celebrate, theme toggle, quit)
-- **CLI** — `argparse` for `--send`, `--wave`, `--test`, `--theme`, `--startup`, etc.
-- **Main loop** — pygame event loop at 120 FPS
+- **`app.py`** — thin orchestrator: argparse → resolve theme → handle
+  one-shot signal flags → daemonise → bind lock → init pygame → run
+  the main loop.
+- **`state.py`** — `BuddyState` with five modes (`idle`, `celebrating`,
+  `waving`, `greeting`, `thinking`), a reaction queue, and the
+  session-greeting dedup logic.
+- **`ipc.py`** — socket listener thread plus the pure
+  `parse_message` / `dispatch_action` functions used by tests.
+- **`ui/`** — anything visual or audible: themes, sound packs, drawing
+  primitives, About dialog, tray.
+- **`platform/`** — every line of platform-specific code lives behind a
+  cross-platform facade (`get_window_handle`, `setup_window`, …). The
+  `_windows.py` / `_linux.py` impls are only imported when their OS
+  matches `sys.platform`.
+- **`config.py`** — atomic read/write of `config.json` with schema
+  migration (legacy `sound: bool` → `sound_pack: str`).
+- **`cli.py`** — every CLI flag and the Claude Code hook stdin reader.
+- **`constants.py`** — window dimensions, IPC port, transparency key.
+  Imported by both rendering and platform code so they stay in sync.
 
 ## Making changes
 
 1. Fork the repo and create a feature branch off `develop`
-2. Make your changes in `src/clawd_buddy/app.py`
-3. Test manually: `clawd-buddy --test` (celebrate), `clawd-buddy --wave` (wave signal)
-4. Test both themes: `clawd-buddy --theme dark`, `clawd-buddy --theme light`
-5. Update `CHANGELOG.md` under an `[Unreleased]` section
-6. Open a pull request targeting `develop`
+2. Make your changes in the relevant module(s)
+3. Add or update tests in `tests/test_<module>.py`
+4. Run the test suite: `python -m pytest`
+5. Test manually: `clawd-buddy --test` (celebrate), `clawd-buddy --wave` (wave signal)
+6. Update `CHANGELOG.md` under an `[Unreleased]` section
+7. Open a pull request targeting `develop`
 
 ## Adding a new animation state
 
-1. Add the state name to `BuddyState` (add a property and trigger method)
-2. Add drawing logic in `draw_buddy()` — follow the pattern of `cel`/`wav` branches
-3. Add a new action string in `socket_listener()` dispatch
-4. Add a CLI flag in `parse_args()` and handle it in `main()`
-5. Document the new hook in `README.md`
+1. Add the state name to `state.py` (mode constant, `BuddyState`
+   property, trigger method that goes through `_request`)
+2. Add drawing logic in `ui/drawing.py`'s `draw_buddy` — follow the
+   `cel` / `wav` / `greet` / `think` branches
+3. Add a new action constant in `ipc.py`'s `ACTION_*` block and route
+   it in `dispatch_action`
+4. Add a CLI flag in `cli.py` and handle it in `main()` (build the
+   payload + call `send_signal`)
+5. Add tests in `tests/test_buddy_state.py`, `tests/test_ipc.py`, and
+   `tests/test_cli.py`
+6. Document the new hook in `README.md`
 
 ## Releasing
 
