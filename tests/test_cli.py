@@ -36,6 +36,8 @@ class TestDefaults:
         assert args.no_topmost is False
         assert args.session_id is None
         assert args.theme is None
+        assert args.message is None
+        assert args.status is False
 
 
 # ── Individual flag parsing ──────────────────────────────────────────
@@ -91,6 +93,19 @@ class TestFlags:
     def test_no_topmost(self):
         assert cli.parse_args(["--no-topmost"]).no_topmost is True
 
+    def test_message_with_text(self):
+        args = cli.parse_args(["--message", "build green"])
+        assert args.message == "build green"
+
+    def test_message_empty_string_is_allowed(self):
+        # Empty string is the dismiss-bubble signal — must round-trip
+        # through argparse rather than being treated as missing.
+        args = cli.parse_args(["--message", ""])
+        assert args.message == ""
+
+    def test_status_flag(self):
+        assert cli.parse_args(["--status"]).status is True
+
 
 # ── --version short-circuits with exit code 0 ────────────────────────
 class TestVersion:
@@ -113,6 +128,13 @@ class TestHelpText:
         assert "--session-id" in out
         assert "--wave" in out
         assert "--theme" in out
+
+    def test_help_lists_M2_flags(self, capsys):
+        with pytest.raises(SystemExit):
+            cli.parse_args(["--help"])
+        out = capsys.readouterr().out
+        assert "--message" in out
+        assert "--status" in out
 
 
 # ── read_hook_stdin behaviours ───────────────────────────────────────

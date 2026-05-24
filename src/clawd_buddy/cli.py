@@ -62,10 +62,12 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  clawd-buddy               Start buddy on taskbar\n"
+            "  clawd-buddy                Start buddy on taskbar\n"
             "  clawd-buddy --test         Start with a celebration\n"
             "  clawd-buddy --send Done!   Signal a running buddy\n"
             "  clawd-buddy --wave         Wave for attention\n"
+            "  clawd-buddy --message 'tests green'  Show a speech bubble\n"
+            "  clawd-buddy --status       Print running buddy state as JSON\n"
             "  clawd-buddy --prompt-start Greet (if new session) + start thinking\n"
             "  clawd-buddy --top          Bring buddy to front (re-assert topmost)\n"
             "  clawd-buddy --quit         Ask the running buddy to exit cleanly\n"
@@ -92,6 +94,16 @@ def build_parser():
                    help="Tell running buddy to re-assert always-on-top and exit")
     p.add_argument("--quit", action="store_true",
                    help="Ask running buddy to exit cleanly and exit")
+    p.add_argument("--message", metavar="TEXT", default=None,
+                   help=("Show a speech bubble with TEXT above the running "
+                         "buddy for ~3 seconds, then exit. Replaces any "
+                         "bubble currently showing. Pass an empty string "
+                         "to dismiss immediately."))
+    p.add_argument("--status", action="store_true",
+                   help=("Print the running buddy's state as JSON (version, "
+                         "pid, port, mode, queue depth, theme, sound pack, "
+                         "bubble text, last action) and exit. Exit code 1 "
+                         "if no buddy is listening on the port."))
     p.add_argument("--prompt-start", dest="prompt_start", action="store_true",
                    help=("Signal the start of a Claude Code prompt "
                          "(UserPromptSubmit hook). Greets on the first prompt "

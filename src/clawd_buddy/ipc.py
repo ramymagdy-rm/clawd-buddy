@@ -22,7 +22,13 @@ Supported actions (and the BuddyState method they invoke):
     greet          → state.greet(session_id=…)
     thinking_start → state.start_thinking()
     thinking_end   → state.end_thinking()
+    message        → state.set_message(text=…)             (M2)
+    status         → server replies with JSON status        (M2)
     <anything else> → state.trigger()   (defensive default for older clients)
+
+`status` is the one request/response action — every other action is
+fire-and-forget. See
+.ai/decisions/2026-05-24-milestone-2-buddy-speaks.md for the rationale.
 
 The dispatch logic lives in `dispatch_action` as a pure function so it
 can be tested without a real socket. `socket_listener` is the network
@@ -30,8 +36,10 @@ shell that wraps the dispatch in an accept-loop.
 """
 
 import json
+import os
 import socket
 
+from . import __version__
 from .constants import SOCK_HOST, SOCK_PORT
 
 
@@ -46,6 +54,8 @@ ACTION_PROMPT_START = "prompt_start"
 ACTION_GREET = "greet"
 ACTION_THINKING_START = "thinking_start"
 ACTION_THINKING_END = "thinking_end"
+ACTION_MESSAGE = "message"
+ACTION_STATUS = "status"
 
 KNOWN_ACTIONS = frozenset({
     ACTION_CELEBRATE,
@@ -56,6 +66,8 @@ KNOWN_ACTIONS = frozenset({
     ACTION_GREET,
     ACTION_THINKING_START,
     ACTION_THINKING_END,
+    ACTION_MESSAGE,
+    ACTION_STATUS,
 })
 
 
@@ -93,6 +105,10 @@ def dispatch_action(state, action, payload=None):
     falls through to celebrate). The return value is only used by tests
     today, but it makes the function's contract precise: callers can
     log unknown actions if they care.
+
+    Note: `status` is a no-op here — the listener intercepts it before
+    dispatch to send a response. We still register it in KNOWN_ACTIONS
+    so the protocol surface is centralised in one place.
     """
     payload = payload or {}
     if action == ACTION_WAVE:
@@ -109,17 +125,56 @@ def dispatch_action(state, action, payload=None):
         state.start_thinking()
     elif action == ACTION_THINKING_END:
         state.end_thinking()
+    elif action == ACTION_MESSAGE:
+        state.set_message(payload.get("text", ""))
+    elif action == ACTION_STATUS:
+        # Handled by the listener (request/response). Nothing to do on
+        # the state side — but we still record the action below so
+        # `--status` reports "status" as its own last_action.
+        pass
     else:
         # Defensive default: any unrecognised action celebrates. This
         # preserves backward-compat with older buddy clients that sent
         # the literal "done" or empty string for a Stop hook.
         state.trigger()
+    state.record_action(action if action in KNOWN_ACTIONS else ACTION_CELEBRATE)
     return action in KNOWN_ACTIONS
+
+
+def build_status_response(state, port=SOCK_PORT, topmost=True):
+    """Snapshot the running buddy's state as a JSON-serialisable dict.
+
+    `port` and `topmost` are passed in from the listener / app context —
+    `BuddyState` deliberately doesn't know about either (state stays
+    pygame-/socket-free for testability). `last_action_ts` is `None`
+    until the first action lands; callers can use that to tell a fresh
+    buddy from a long-running one.
+    """
+    return {
+        "version": __version__,
+        "pid": os.getpid(),
+        "port": port,
+        "mode": state.mode,
+        "queue_depth": state.queue_depth,
+        "last_session_id": state.last_session_id,
+        "last_action": state.last_action,
+        "last_action_ts": (state.last_action_ts
+                           if state.last_action is not None else None),
+        "theme": state.theme_name,
+        "sound_pack": state.sound_pack,
+        "topmost": bool(topmost),
+        "bubble_text": state.bubble_text,
+    }
 
 
 def socket_listener(state, port=SOCK_PORT, host=SOCK_HOST):
     """Run the accept-loop forever, routing each incoming message
-    through `dispatch_action`. Designed to run on a daemon thread."""
+    through `dispatch_action`. Designed to run on a daemon thread.
+
+    `status` is the only action that elicits a response — the listener
+    writes the JSON snapshot back on the same connection before closing.
+    Every other action is fire-and-forget.
+    """
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -137,12 +192,20 @@ def socket_listener(state, port=SOCK_PORT, host=SOCK_HOST):
             try:
                 conn.settimeout(2.0)
                 data = conn.recv(4096)
+                if data:
+                    action, msg = parse_message(data)
+                    print(f"[buddy] Signal: {action}")
+                    dispatch_action(state, action, msg)
+                    if action == ACTION_STATUS:
+                        resp = build_status_response(
+                            state, port=port, topmost=state.topmost)
+                        try:
+                            conn.sendall(
+                                (json.dumps(resp) + "\n").encode("utf-8"))
+                        except OSError as e:
+                            print(f"[buddy] Status reply failed: {e}")
             finally:
                 conn.close()
-            if data:
-                action, msg = parse_message(data)
-                print(f"[buddy] Signal: {action}")
-                dispatch_action(state, action, msg)
         except socket.timeout:
             continue
         except Exception as e:
@@ -164,3 +227,30 @@ def send_signal(payload, port=SOCK_PORT, host=SOCK_HOST):
         return True
     except ConnectionRefusedError:
         return False
+
+
+def request_status(port=SOCK_PORT, host=SOCK_HOST, timeout=2.0):
+    """Ask the running buddy for its current state. Returns the parsed
+    JSON response dict, or None if no buddy is listening or the response
+    was unreadable. Callers should treat None as "no buddy".
+    """
+    payload = json.dumps({"action": ACTION_STATUS}).encode("utf-8")
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect((host, port))
+            s.sendall(payload)
+            # Server writes the JSON response then closes — read to EOF.
+            chunks = []
+            while True:
+                buf = s.recv(4096)
+                if not buf:
+                    break
+                chunks.append(buf)
+        raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
+        if not raw:
+            return None
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (ConnectionRefusedError, json.JSONDecodeError, OSError):
+        return None

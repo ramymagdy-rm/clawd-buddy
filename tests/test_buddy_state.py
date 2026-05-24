@@ -272,6 +272,98 @@ class TestPromptStart:
         assert state.mode == "greeting"
 
 
+# ── Speech bubble (M2: --message) ────────────────────────────────────
+class TestSpeechBubble:
+    def test_initial_bubble_is_empty(self, state):
+        assert state.bubble_text == ""
+
+    def test_set_message_stores_text(self, state):
+        state.set_message("hello")
+        assert state.bubble_text == "hello"
+
+    def test_set_message_strips_whitespace(self, state):
+        state.set_message("  spaced  ")
+        assert state.bubble_text == "spaced"
+
+    def test_set_message_empty_clears_bubble(self, state):
+        state.set_message("hello")
+        state.set_message("")
+        assert state.bubble_text == ""
+
+    def test_set_message_whitespace_clears_bubble(self, state):
+        state.set_message("hello")
+        state.set_message("   \t  ")
+        assert state.bubble_text == ""
+
+    def test_set_message_truncates_long_text(self, state):
+        from clawd_buddy.state import MAX_BUBBLE_LEN
+
+        long = "x" * (MAX_BUBBLE_LEN + 50)
+        state.set_message(long)
+        # Truncated at MAX_BUBBLE_LEN with a single ellipsis.
+        assert len(state.bubble_text) == MAX_BUBBLE_LEN
+        assert state.bubble_text.endswith("…")
+
+    def test_set_message_ignores_non_string(self, state):
+        state.set_message(42)
+        assert state.bubble_text == ""
+
+    def test_message_expires_after_duration(self, state, clock):
+        state.set_message("hi", duration=1.0)
+        assert state.bubble_text == "hi"
+        clock.advance(1.5)
+        state.update()
+        assert state.bubble_text == ""
+
+    def test_message_does_not_expire_before_duration(self, state, clock):
+        state.set_message("hi", duration=2.0)
+        clock.advance(1.0)
+        state.update()
+        assert state.bubble_text == "hi"
+
+    def test_new_message_replaces_old(self, state):
+        state.set_message("first")
+        state.set_message("second")
+        assert state.bubble_text == "second"
+
+    def test_bubble_independent_of_mode(self, state):
+        # A bubble must not preempt or queue against a celebrate — the
+        # whole point of the overlay design is that they coexist.
+        state.trigger()
+        assert state.mode == "celebrating"
+        state.set_message("done")
+        assert state.mode == "celebrating"
+        assert state.bubble_text == "done"
+
+
+# ── record_action (M2: --status feeds last_action) ───────────────────
+class TestRecordAction:
+    def test_initial_last_action_is_none(self, state):
+        assert state.last_action is None
+        assert state.last_action_ts == 0.0
+
+    def test_record_action_stores_token_and_ts(self, state, clock):
+        clock.advance(123.0)
+        state.record_action("wave")
+        assert state.last_action == "wave"
+        assert state.last_action_ts == clock.t
+
+    def test_record_action_ignores_empty(self, state):
+        state.record_action("")
+        assert state.last_action is None
+
+    def test_record_action_ignores_non_string(self, state):
+        state.record_action(None)
+        state.record_action(42)
+        assert state.last_action is None
+
+
+# ── topmost mirror (M2: --status reports it) ─────────────────────────
+class TestTopmost:
+    def test_default_topmost_true(self, state):
+        assert state.topmost is True
+
+
 # ── Sound pack interaction ───────────────────────────────────────────
 class TestSoundIntegration:
     def test_celebrate_queues_sound_when_pack_enabled(self, clock):

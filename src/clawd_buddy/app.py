@@ -36,6 +36,7 @@ Switch themes from the system-tray right-click menu (Theme submenu)
 or with the --theme CLI flag at launch.
 """
 
+import json
 import os
 import socket
 import sys
@@ -45,7 +46,7 @@ import time
 from .cli import parse_args, read_hook_stdin
 from .config import load_saved_sound_pack, load_saved_theme, save_theme_pref
 from .constants import FPS, SOCK_PORT, WIN_H, WIN_W
-from .ipc import send_signal, socket_listener
+from .ipc import request_status, send_signal, socket_listener
 from .platform import (
     auto_detach,
     disable_startup,
@@ -100,10 +101,20 @@ def main():
         disable_startup()
         sys.exit(0)
 
-    # --send / --wave / --top / --quit / --prompt-start
+    # --status — request/response: ask the running buddy for its state
+    # and print the JSON to stdout. Exit 1 if no buddy is listening.
+    if args.status:
+        info = request_status(port=port)
+        if info is None:
+            print(f"[buddy] No buddy on port {port}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(info, indent=2))
+        sys.exit(0)
+
+    # --send / --wave / --top / --quit / --prompt-start / --message
     # (any of these signals a running instance and exits)
     if (args.send is not None or args.wave or args.top or args.quit
-            or args.prompt_start):
+            or args.prompt_start or args.message is not None):
         payload_obj = {}
         if args.quit:
             payload_obj["action"] = "quit"
@@ -111,6 +122,9 @@ def main():
             payload_obj["action"] = "raise"
         elif args.wave:
             payload_obj["action"] = "wave"
+        elif args.message is not None:
+            payload_obj["action"] = "message"
+            payload_obj["text"] = args.message
         elif args.prompt_start:
             payload_obj["action"] = "prompt_start"
             # Claude Code passes hook metadata as JSON on stdin. Prefer an
@@ -185,6 +199,7 @@ def main():
     topmost = not args.no_topmost
     state = BuddyState(theme_name=args.theme,
                        sound_pack=load_saved_sound_pack())
+    state.topmost = topmost
 
     # Audio is best-effort: init may fail on headless machines / containers /
     # missing audio device — we still run silently in that case. Every
@@ -229,6 +244,7 @@ def main():
         if state._raise_requested:
             state._raise_requested = False
             topmost = True
+            state.topmost = True
             raise_window(handle)
 
         # Drain pending notification sound. Producers (socket listener,
