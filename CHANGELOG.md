@@ -4,6 +4,65 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed — Internal: app.py decomposed into modules
+
+The previously-monolithic `src/clawd_buddy/app.py` (1879 lines) has been
+broken into focused, independently-importable modules. **No user-visible
+behaviour changes** — every CLI flag, hook, animation, theme, and sound
+pack works identically. The new layout:
+
+```text
+src/clawd_buddy/
+├── app.py          # main() orchestration (300 lines)
+├── constants.py    # WIN_W/WIN_H/FPS/TKEY/SOCK_HOST/SOCK_PORT
+├── state.py        # BuddyState state machine + mode constants
+├── cli.py          # argparse setup + stdin hook reader
+├── config.py       # ~/.config/clawd-buddy persistence
+├── ipc.py          # socket protocol + dispatcher + send_signal client
+├── ui/
+│   ├── themes.py   # THEMES registry + helpers
+│   ├── sound.py    # procedural PCM generators + pack registry
+│   ├── drawing.py  # rounded_rect + draw_buddy
+│   ├── about.py    # About dialog + shared buddy icon
+│   └── tray.py     # pystray icon + right-click menu
+└── platform/
+    ├── __init__.py # cross-platform facade
+    ├── _windows.py # Win32 ctypes impl
+    └── _linux.py   # X11 / XDG impl
+```
+
+### Added — Extensive unit tests
+
+Test count grew from 32 to 211 (179 new tests across the new modules).
+Coverage now includes:
+
+- **`tests/test_themes.py`** — registry shape, required-key invariants,
+  RGB validity for every theme.
+- **`tests/test_sound.py`** — PCM length / framing / envelope behaviour,
+  per-pack non-empty output, celebrate ≠ wave per pack.
+- **`tests/test_drawing.py`** — smoke tests for every mode + theme +
+  blink combination; confetti lifecycle verified.
+- **`tests/test_config.py`** — round-trip, atomic write, legacy `sound:
+  bool` migration, schema rejection of unknown values.
+- **`tests/test_ipc.py`** — `parse_message` and `dispatch_action`
+  exhaustive coverage, end-to-end round-trip on an ephemeral port.
+- **`tests/test_cli.py`** — every CLI flag, `--version` exit code,
+  `read_hook_stdin` TTY / JSON / malformed handling.
+- **`tests/test_platform.py`** — facade dispatch, OS-specific
+  `get_bg_fill` behaviour, stub fallback for unsupported platforms.
+- **`tests/test_about_and_tray.py`** — buddy icon image shape /
+  non-blank, `_ABOUT_DIALOG_OPEN` reentrancy guard, tray log path.
+
+### Documentation
+
+- `.ai/decisions/2026-05-24-app-decomposition.md` — rationale for the
+  module layout (concern grouping vs flat, `platform/` shadowing
+  consideration, conditional impl import).
+- `README.md` Architecture section now references the new module
+  layout instead of "everything is in app.py".
+
 ## [0.1.11] - 2026-05-24
 
 ### Added — Milestone 1: Full session arc
