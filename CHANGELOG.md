@@ -4,6 +4,17 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.13] - 2026-05-24
+
+### Removed
+
+- **`FEATURES/SUGGESTIONS.md`** — pre-Clawd-Buddy planning notes for a
+  separate "general-purpose dev assistant" concept that never matched
+  this project's direction. Planning has lived under `.ai/roadmap.md`
+  since v0.1.11; the orphaned file was just confusing. No code or
+  packaged artefact is affected — `FEATURES/` was never included in the
+  wheel.
+
 ## [0.1.12] - 2026-05-24
 
 ### Changed — Internal: app.py decomposed into modules
