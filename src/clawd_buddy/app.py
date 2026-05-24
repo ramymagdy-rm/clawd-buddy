@@ -15,6 +15,11 @@ Options:
   --test           Trigger a test celebration on startup
   --send MESSAGE   Signal a running buddy (celebrate) and exit
   --wave           Signal buddy to wave (attention needed) and exit
+  --prompt-start   Signal a Claude Code prompt start (greet if new
+                   session, then enter the thinking animation) and exit.
+                   Reads session_id from piped JSON on stdin when run as
+                   a hook command.
+  --session-id ID  Explicit session id for --prompt-start (overrides stdin)
   --top            Signal running buddy to re-assert always-on-top and exit
   --quit           Ask the running buddy to exit cleanly and exit
   --theme THEME    Color theme — one of: dark, light, dracula, monokai,
@@ -769,14 +774,57 @@ def get_bg_fill(theme_name):
 
 
 # ── State ─────────────────────────────────────────────────────────────
+# Mode taxonomy — see .ai/decisions/2026-05-24-milestone-1-session-arc.md
+# - Ambient modes hold indefinitely and yield to any incoming signal.
+# - Reactive modes own the buddy for a fixed duration, then yield to the
+#   next queued signal (or fall back to idle).
+AMBIENT_MODES = frozenset({"idle", "thinking"})
+REACTIVE_MODES = frozenset({"celebrating", "waving", "greeting"})
+
+# Reactive action → mode name. Used by the queue dispatcher to convert
+# the queued action token into the matching mode string.
+_ACTION_TO_MODE = {
+    "celebrate": "celebrating",
+    "wave": "waving",
+    "greet": "greeting",
+}
+
+# Default per-mode durations (seconds). Read on BuddyState init so tests
+# can override per-instance.
+DEFAULT_CEL_DUR = 5.0
+DEFAULT_WAVE_DUR = 5.0
+DEFAULT_GREET_DUR = 1.8
+
+# Thinking is ambient with a safety cap — if Stop never arrives (assistant
+# crash, network loss) we don't want to stay in the thinking animation
+# forever. Long enough for legitimate long runs, short enough that a
+# stale state self-recovers within ~10 minutes.
+MAX_THINKING_SECONDS = 600.0
+
+# Without an explicit session id, treat any prompt arriving after this
+# many idle seconds as the start of a new session (so we greet again).
+NEW_SESSION_IDLE_SECONDS = 1800.0
+
+# Cap on the reaction queue. Three is enough to absorb a normal burst
+# (e.g. a wave during a celebrate during another celebrate) without
+# letting a runaway producer build up minutes of animations no longer
+# tied to their original event.
+QUEUE_MAX = 3
+
+
 class BuddyState:
     SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0}
 
-    def __init__(self, theme_name="dark", sound_pack=None):
+    def __init__(self, theme_name="dark", sound_pack=None,
+                 clock=None):
+        # `clock` indirection so unit tests can advance time without
+        # actually sleeping. Defaults to time.time at runtime.
+        self._clock = clock if clock is not None else time.time
         self.mode = "idle"
         self.mode_start = 0.0
-        self.cel_dur = 5.0
-        self.wave_dur = 5.0
+        self.cel_dur = DEFAULT_CEL_DUR
+        self.wave_dur = DEFAULT_WAVE_DUR
+        self.greet_dur = DEFAULT_GREET_DUR
         self.confetti = []
         self.should_quit = False
         self.theme_name = theme_name
@@ -786,14 +834,21 @@ class BuddyState:
         self._raise_requested = False
         # Notification sound — queued from socket / tray / key threads and
         # consumed by the main loop so mixer.play() only runs on one thread.
-        # `sound_pack` is the chosen profile (SOUND_PACK_OFF means muted).
-        # None defaults to DEFAULT_SOUND_PACK; the constant lives further
-        # down in the file so we resolve it at instantiation time.
         if sound_pack is None or sound_pack not in SOUND_PACK_CHOICES:
             sound_pack = DEFAULT_SOUND_PACK
         self.sound_pack = sound_pack
         self._pending_sound = None  # "celebrate" | "wave" | None
 
+        # Reaction queue (FIFO of (action, kwargs)). See _request().
+        self._queue = []
+
+        # Session-greeting state. last_session_id is what we saw most
+        # recently; last_activity_ts is the wall-clock of the last
+        # prompt_start (used for the no-session-id fallback).
+        self._last_session_id = None
+        self._last_activity_ts = 0.0
+
+    # ── Sound ────────────────────────────────────────────────────
     @property
     def sound_enabled(self):
         return self.sound_pack != SOUND_PACK_OFF
@@ -810,6 +865,7 @@ class BuddyState:
         if pack != SOUND_PACK_OFF:
             self._pending_sound = "celebrate"
 
+    # ── Mode introspection (used by draw_buddy and tests) ────────
     @property
     def celebrating(self):
         return self.mode == "celebrating"
@@ -818,6 +874,23 @@ class BuddyState:
     def waving(self):
         return self.mode == "waving"
 
+    @property
+    def greeting(self):
+        return self.mode == "greeting"
+
+    @property
+    def thinking(self):
+        return self.mode == "thinking"
+
+    @property
+    def queue_depth(self):
+        return len(self._queue)
+
+    @property
+    def last_session_id(self):
+        return self._last_session_id
+
+    # ── Theme / window ───────────────────────────────────────────
     def set_theme(self, name):
         if name in THEMES:
             self.theme_name = name
@@ -829,29 +902,147 @@ class BuddyState:
             self.scale = self.SCALE_PRESETS[preset]
             self._scale_changed = True
 
-    def trigger(self, _msg=""):
-        self.mode = "celebrating"
-        self.mode_start = time.time()
-        self.confetti = _spawn_confetti(40)
-        if self.sound_enabled:
-            self._pending_sound = "celebrate"
-
-    def wave(self):
-        if self.mode != "celebrating":
-            self.mode = "waving"
-            self.mode_start = time.time()
-            if self.sound_enabled:
-                self._pending_sound = "wave"
-
     def bring_to_front(self):
         self._raise_requested = True
 
+    # ── Public action surface ────────────────────────────────────
+    # Each of these is a thin wrapper around _request so callers don't
+    # have to know about the queue / preemption rules.
+    def trigger(self, _msg=""):
+        """Celebrate — assistant finished. Preempts thinking/idle, queues
+        behind another reactive mode."""
+        self._request("celebrate")
+
+    def wave(self):
+        """Wave for attention. Same priority as celebrate; queues if
+        another reactive mode is already animating."""
+        self._request("wave")
+
+    def greet(self, session_id=None):
+        """Soft greeting animation for the start of a new session.
+        Use prompt_start() instead unless you specifically want to bypass
+        the new-session check."""
+        self._request("greet", session_id=session_id)
+
+    def start_thinking(self):
+        """Enter the thinking animation. No-op if already thinking; queues
+        behind a reactive mode so thinking resumes after a celebrate/wave
+        clears."""
+        self._request("start_thinking")
+
+    def end_thinking(self):
+        """Leave thinking. No-op if not currently thinking. Reactive modes
+        already implicitly end thinking by preempting it, so callers
+        rarely need this directly."""
+        self._request("end_thinking")
+
+    def prompt_start(self, session_id=None):
+        """UserPromptSubmit handler — the wire-once Claude Code entry point.
+
+        Decides whether this is the *first* prompt of a session and emits
+        a greet + start_thinking accordingly. Greets when:
+          - session_id is given and differs from the last one we saw, OR
+          - no session_id is given and we've been idle longer than
+            NEW_SESSION_IDLE_SECONDS (or never seen a prompt before).
+        Always starts thinking afterwards.
+        """
+        now = self._clock()
+        if session_id:
+            is_new_session = session_id != self._last_session_id
+            self._last_session_id = session_id
+        else:
+            is_new_session = (self._last_activity_ts == 0.0
+                              or now - self._last_activity_ts
+                              > NEW_SESSION_IDLE_SECONDS)
+        self._last_activity_ts = now
+        if is_new_session:
+            self._request("greet")
+        self._request("start_thinking")
+
+    # ── Per-frame tick ───────────────────────────────────────────
     def update(self):
-        elapsed = time.time() - self.mode_start
+        """Called once per frame. Expires reactive modes and pulls the
+        next queued action; also enforces the thinking safety cap."""
+        elapsed = self._clock() - self.mode_start
         if self.mode == "celebrating" and elapsed > self.cel_dur:
-            self.mode = "idle"
+            self._advance_from_reactive()
         elif self.mode == "waving" and elapsed > self.wave_dur:
-            self.mode = "idle"
+            self._advance_from_reactive()
+        elif self.mode == "greeting" and elapsed > self.greet_dur:
+            self._advance_from_reactive()
+        elif self.mode == "thinking" and elapsed > MAX_THINKING_SECONDS:
+            self._enter("idle")
+
+    # ── Internal: dispatch / queue ───────────────────────────────
+    def _request(self, action, **kwargs):
+        """Single entry point for all mode transitions. Either applies
+        the action immediately or enqueues it; see the decision doc."""
+        if action == "end_thinking":
+            if self.mode == "thinking":
+                self._enter("idle")
+            return
+
+        if action == "start_thinking":
+            if self.mode == "thinking":
+                return  # already thinking
+            if self.mode == "idle":
+                self._enter("thinking")
+                return
+            self._enqueue(action, kwargs)
+            return
+
+        if action in ("celebrate", "wave", "greet"):
+            if self.mode in REACTIVE_MODES:
+                self._enqueue(action, kwargs)
+                return
+            # idle or thinking → apply now (celebrate/wave preempt
+            # thinking; greet preempts thinking too — design doc rule).
+            self._enter_reactive(action, kwargs)
+            return
+
+    def _enter(self, mode):
+        self.mode = mode
+        self.mode_start = self._clock()
+
+    def _enter_reactive(self, action, kwargs):
+        """Switch to the reactive mode for `action`, doing any per-action
+        side effects (confetti spawn, pending sound)."""
+        self.mode = _ACTION_TO_MODE[action]
+        self.mode_start = self._clock()
+        if action == "celebrate":
+            self.confetti = _spawn_confetti(40)
+            if self.sound_enabled:
+                self._pending_sound = "celebrate"
+        elif action == "wave":
+            if self.sound_enabled:
+                self._pending_sound = "wave"
+        # greet: silent in M1 — see decision doc §"Visual + audio"
+
+    def _enqueue(self, action, kwargs):
+        """Add to the FIFO. Suppresses consecutive `start_thinking`s
+        (they would just resume the same ambient animation) and caps the
+        queue at QUEUE_MAX to bound runaway producers."""
+        if action == "start_thinking":
+            if self._queue and self._queue[-1][0] == "start_thinking":
+                return
+        if len(self._queue) >= QUEUE_MAX:
+            return
+        self._queue.append((action, kwargs))
+
+    def _advance_from_reactive(self):
+        """A reactive mode just expired. Pop the next queued action and
+        apply it; if the queue is empty, fall back to idle."""
+        if not self._queue:
+            self._enter("idle")
+            return
+        action, kwargs = self._queue.pop(0)
+        if action == "start_thinking":
+            self._enter("thinking")
+        elif action in ("celebrate", "wave", "greet"):
+            self._enter_reactive(action, kwargs)
+        else:
+            # end_thinking or unknown — degrade to idle.
+            self._enter("idle")
 
 
 def _spawn_confetti(n):
@@ -1075,6 +1266,8 @@ def draw_buddy(surf, t, state, blink):
     th = state.theme
     cel = state.celebrating
     wav = state.waving
+    greet = state.greeting
+    think = state.thinking
     cx = WIN_W // 2
     base_y = WIN_H - 70
     bob = math.sin(t * 2.2) * 1.5
@@ -1082,6 +1275,12 @@ def draw_buddy(surf, t, state, blink):
         bob = math.sin(t * 10) * 6
     elif wav:
         bob = math.sin(t * 4) * 3
+    elif greet:
+        bob = math.sin(t * 5) * 4
+    elif think:
+        # Slower, slightly higher amplitude than idle — a "concentrating
+        # sway" that reads as alive but not excited.
+        bob = math.sin(t * 1.3) * 1.8
 
     by = int(base_y - CHAR_H + bob)
 
@@ -1094,7 +1293,11 @@ def draw_buddy(surf, t, state, blink):
     elif wav:
         l_swing = math.sin(t * 3) * 3
         r_swing = math.sin(t * 3 + math.pi) * 3
+    elif greet:
+        l_swing = math.sin(t * 2.5) * 2
+        r_swing = math.sin(t * 2.5 + math.pi) * 2
     else:
+        # Shared by idle and thinking — quiet baseline sway.
         l_swing = math.sin(t * 1.8) * 1.5
         r_swing = math.sin(t * 1.8 + math.pi) * 1.5
     for sx, sw in [(-14, l_swing), (14, r_swing)]:
@@ -1112,7 +1315,13 @@ def draw_buddy(surf, t, state, blink):
     elif wav:
         la = math.sin(t * 1.2) * 0.1 - 0.2
         ra = math.sin(t * 6) * 0.4 - 1.0
+    elif greet:
+        # Right arm raised in a friendly hello — softer than the "needs
+        # attention" wave (lower amplitude, smaller raise).
+        la = math.sin(t * 1.2) * 0.1 - 0.2
+        ra = math.sin(t * 4) * 0.3 - 0.6
     else:
+        # idle / thinking
         la = math.sin(t * 1.2) * 0.1 - 0.2
         ra = math.sin(t * 1.2 + 1) * 0.1 + 0.2
 
@@ -1160,11 +1369,25 @@ def draw_buddy(surf, t, state, blink):
             pygame.draw.arc(surf, th["mouth_happy"],
                             (ex - 7, ey - 5, 14, 10),
                             math.radians(0), math.radians(180), 3)
+    elif greet:
+        # Smaller happy arc than celebrate — friendly but not exuberant.
+        for ex in (lex, rex):
+            pygame.draw.arc(surf, th["mouth_happy"],
+                            (ex - 6, ey - 4, 12, 8),
+                            math.radians(0), math.radians(180), 2)
     elif wav:
         for ex in (lex, rex):
             pygame.draw.circle(surf, th["eye_white"], (ex, ey), er + 1)
             pygame.draw.circle(surf, th["pupil"], (ex, ey), 5)
             pygame.draw.circle(surf, (255, 255, 255), (ex - 2, ey - 3), 2)
+    elif think:
+        # Pupils lifted slightly + a slow horizontal sweep ⇒ "considering".
+        for ex in (lex, rex):
+            pygame.draw.circle(surf, th["eye_white"], (ex, ey), er)
+            px = ex + math.sin(t * 0.9) * 3
+            py = ey - 2 + math.cos(t * 0.5) * 0.5
+            pygame.draw.circle(surf, th["pupil"], (int(px), int(py)), 4)
+            pygame.draw.circle(surf, (255, 255, 255), (ex - 2, ey - 4), 2)
     else:
         for ex in (lex, rex):
             pygame.draw.circle(surf, th["eye_white"], (ex, ey), er)
@@ -1179,9 +1402,15 @@ def draw_buddy(surf, t, state, blink):
         pygame.draw.arc(surf, th["mouth_happy"],
                         (cx - 10, my - 7, 20, 12),
                         math.radians(200), math.radians(340), 2)
+    elif greet:
+        # Smaller smile — friendly, lower-key than celebrate.
+        pygame.draw.arc(surf, th["mouth_happy"],
+                        (cx - 7, my - 5, 14, 9),
+                        math.radians(200), math.radians(340), 2)
     elif wav:
         pygame.draw.circle(surf, th["wave_eye"], (cx, my - 2), 4, 2)
     else:
+        # Idle and thinking share the calm mouth line.
         w_m = 10 + math.sin(t * 1.5) * 1
         pygame.draw.line(surf, th["mouth"],
                          (int(cx - w_m / 2), my),
@@ -1189,18 +1418,32 @@ def draw_buddy(surf, t, state, blink):
 
     # ── Attention border ──────────────────────────────────────────
     # Pulsing rounded outline framing the body to catch peripheral vision.
-    # Green = celebrating (done), yellow = waving (attention needed).
     # Fixed colors instead of theme accents so the meaning is consistent
-    # across all 8 themes.
-    if cel or wav:
+    # across all 8 themes:
+    #   green   = celebrating  (done)
+    #   yellow  = waving       (attention needed)
+    #   cyan    = greeting     (new session)
+    #   purple  = thinking     (responding) — gentler pulse, lower max alpha
+    if cel or wav or greet or think:
         if cel:
             border_color = (80, 220, 110)   # bright green
             pulse_speed = 6.0
-        else:
+        elif wav:
             border_color = (255, 215, 60)   # warm yellow
             pulse_speed = 4.0
+        elif greet:
+            border_color = (60, 180, 220)   # soft cyan
+            pulse_speed = 5.0
+        else:  # think
+            border_color = (160, 130, 220)  # soft purple
+            pulse_speed = 1.2
         pulse = (math.sin(t * pulse_speed) + 1) / 2  # 0..1
-        alpha_val = int(60 + 195 * pulse)            # ~60..255
+        if think:
+            # Thinking is the ambient mode — keep the pulse muted so it
+            # blends into the background while a prompt is processing.
+            alpha_val = int(40 + 90 * pulse)         # ~40..130
+        else:
+            alpha_val = int(60 + 195 * pulse)        # ~60..255
         pad = 3
         thick = 3
         bw = CHAR_W + 2 * pad
@@ -1226,6 +1469,21 @@ def draw_buddy(surf, t, state, blink):
                          border_radius=3)
         pygame.draw.circle(bang_surf, bang_color, (10, 22), 3)
         surf.blit(bang_surf, (ix - 10, iy - 14))
+
+    # ── Thinking indicator (•••) ──────────────────────────────────
+    # Three small purple dots above the head, each pulsing on its own
+    # phase so the cluster reads as a "typing" animation rather than a
+    # static decoration.
+    if think:
+        dot_y = by - 12
+        for i, dx in enumerate((-10, 0, 10)):
+            phase = (math.sin(t * 3.5 + i * 1.4) + 1) / 2
+            alpha_val = int(70 + 150 * phase)
+            dot_surf = pygame.Surface((8, 8), pygame.SRCALPHA)
+            pygame.draw.circle(
+                dot_surf, (160, 130, 220, alpha_val), (4, 4), 3,
+            )
+            surf.blit(dot_surf, (cx + dx - 4, dot_y - 4))
 
     # ── Confetti ──────────────────────────────────────────────────
     alive = []
@@ -1261,6 +1519,7 @@ def socket_listener(state, port):
                 conn.close()
             if data:
                 action = "celebrate"
+                msg = {}
                 try:
                     msg = json.loads(data)
                     action = msg.get("action", "celebrate")
@@ -1273,6 +1532,14 @@ def socket_listener(state, port):
                     state.bring_to_front()
                 elif action == "quit":
                     state.should_quit = True
+                elif action == "prompt_start":
+                    state.prompt_start(session_id=msg.get("session_id"))
+                elif action == "greet":
+                    state.greet(session_id=msg.get("session_id"))
+                elif action == "thinking_start":
+                    state.start_thinking()
+                elif action == "thinking_end":
+                    state.end_thinking()
                 else:
                     state.trigger()
         except socket.timeout:
@@ -1607,6 +1874,30 @@ def _create_tray_impl(state):
 
 
 # ── CLI ───────────────────────────────────────────────────────────────
+def _read_hook_stdin():
+    """Read Claude Code's hook payload from stdin, if any.
+
+    Claude Code passes a JSON payload (with `session_id`, `transcript_path`,
+    `hook_event_name`, …) on stdin to hook commands. When the buddy CLI is
+    run from a terminal stdin is a TTY, so we skip reading to avoid blocking.
+
+    Returns a dict (empty on missing / malformed input); never raises.
+    """
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    try:
+        data = sys.stdin.read()
+    except (OSError, ValueError):
+        return {}
+    if not data:
+        return {}
+    try:
+        parsed = json.loads(data)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         prog="clawd-buddy",
@@ -1618,6 +1909,7 @@ def parse_args():
             "  clawd-buddy --test         Start with a celebration\n"
             "  clawd-buddy --send Done!   Signal a running buddy\n"
             "  clawd-buddy --wave         Wave for attention\n"
+            "  clawd-buddy --prompt-start Greet (if new session) + start thinking\n"
             "  clawd-buddy --top          Bring buddy to front (re-assert topmost)\n"
             "  clawd-buddy --quit         Ask the running buddy to exit cleanly\n"
             "  clawd-buddy --theme dracula   Use Dracula theme\n"
@@ -1643,6 +1935,17 @@ def parse_args():
                    help="Tell running buddy to re-assert always-on-top and exit")
     p.add_argument("--quit", action="store_true",
                    help="Ask running buddy to exit cleanly and exit")
+    p.add_argument("--prompt-start", dest="prompt_start", action="store_true",
+                   help=("Signal the start of a Claude Code prompt "
+                         "(UserPromptSubmit hook). Greets on the first prompt "
+                         "of a new session and starts the thinking animation. "
+                         "Reads session_id from piped JSON on stdin when "
+                         "available."))
+    p.add_argument("--session-id", dest="session_id", default=None,
+                   metavar="ID",
+                   help=("Session id to associate with --prompt-start. "
+                         "Overrides any session_id read from stdin. Mostly "
+                         "useful for testing."))
     p.add_argument("--theme", choices=list(THEMES.keys()), default=None,
                    metavar="THEME",
                    help=("Color theme. Choices: "
@@ -1683,23 +1986,36 @@ def main():
         disable_startup()
         sys.exit(0)
 
-    # --send / --wave / --top / --quit (signal a running instance)
-    if args.send is not None or args.wave or args.top or args.quit:
+    # --send / --wave / --top / --quit / --prompt-start
+    # (any of these signals a running instance and exits)
+    if (args.send is not None or args.wave or args.top or args.quit
+            or args.prompt_start):
+        payload_obj = {}
         if args.quit:
-            action = "quit"
+            payload_obj["action"] = "quit"
         elif args.top:
-            action = "raise"
+            payload_obj["action"] = "raise"
         elif args.wave:
-            action = "wave"
+            payload_obj["action"] = "wave"
+        elif args.prompt_start:
+            payload_obj["action"] = "prompt_start"
+            # Claude Code passes hook metadata as JSON on stdin. Prefer an
+            # explicit --session-id when given; otherwise fall back to the
+            # piped JSON. When neither is available the running buddy uses
+            # its time-based new-session heuristic.
+            hook = _read_hook_stdin()
+            session_id = args.session_id or hook.get("session_id")
+            if session_id:
+                payload_obj["session_id"] = session_id
         else:
-            action = "celebrate"
-        payload = json.dumps({"action": action}).encode()
+            payload_obj["action"] = "celebrate"
+        payload = json.dumps(payload_obj).encode()
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((SOCK_HOST, port))
             s.sendall(payload)
             s.close()
-            print(f"[buddy] Sent: {action}")
+            print(f"[buddy] Sent: {payload_obj['action']}")
         except ConnectionRefusedError:
             print(f"[buddy] No buddy on port {port}")
             sys.exit(1)
