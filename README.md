@@ -12,8 +12,15 @@ Clawd Buddy is a small always-on-top character that lives on your taskbar while 
 | State | What happens |
 | --- | --- |
 | **Idle** | Gently bobs, blinks, breathes — your quiet companion |
+| **New session begins** (`UserPromptSubmit` hook, first prompt) | Greets with a soft wave, a smaller smile, and a pulsing **cyan** border |
+| **Assistant is thinking** (between `UserPromptSubmit` and `Stop`) | Pupils sweep upward, three pulsing dots float above the head, gentle **purple** border |
 | **Assistant finishes** (`Stop` hook) | Celebrates with confetti, happy eyes, waving arms, a short motivational fanfare, and a pulsing **green** border |
 | **Assistant needs permission** (`PermissionRequest` hook) | Waves with a floating **!**, a warm two-note doorbell call, and a pulsing **yellow** border |
+
+> If multiple signals arrive in quick succession (e.g. a `PermissionRequest`
+> while a celebrate is still animating), the buddy now **queues** them
+> instead of dropping them — up to three pending reactions play back in
+> the order they arrived.
 
 ### Notification sound packs
 
@@ -150,6 +157,17 @@ Add to your **global** Claude Code settings (`~/.claude/settings.json`) so every
 ```json
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clawd-buddy --prompt-start",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -176,7 +194,14 @@ Add to your **global** Claude Code settings (`~/.claude/settings.json`) so every
 }
 ```
 
-> **Note:** If you already have other hooks in your `settings.json`, merge the `Stop` and `PermissionRequest` entries into the existing `hooks` object.
+> **Note:** If you already have other hooks in your `settings.json`, merge the new entries into the existing `hooks` object.
+>
+> `--prompt-start` does two things in one: a soft **greeting** on the
+> first prompt of each Claude Code session (de-duplicated by `session_id`
+> read from the hook's stdin payload), then enters the **thinking**
+> animation that runs until `Stop` arrives. Wiring it is optional —
+> without it, the buddy still celebrates and waves, just without the
+> session-start and mid-response reactions.
 
 ### 4. Done
 
@@ -189,6 +214,13 @@ clawd-buddy                  Start buddy on taskbar
 clawd-buddy --test           Start with a celebration animation
 clawd-buddy --send MSG       Signal a running buddy to celebrate
 clawd-buddy --wave           Signal a running buddy to wave (needs attention)
+clawd-buddy --prompt-start   Signal start of a Claude Code prompt — greets
+                             on the first prompt of a new session, then
+                             enters the thinking animation. Reads
+                             session_id from JSON on stdin when run as a
+                             hook command.
+clawd-buddy --session-id ID  Override the session id used by --prompt-start
+                             (mostly useful for scripts / tests)
 clawd-buddy --top            Tell a running buddy to re-assert always-on-top
 clawd-buddy --quit           Ask a running buddy to exit cleanly
 clawd-buddy --theme THEME    Color theme: dark (default), light, dracula,
@@ -220,15 +252,20 @@ clawd-buddy --help           Show help
 ### Architecture
 
 ```text
-Claude Code                            Clawd Buddy
------------                            -----------
- hooks/Stop ──> clawd-buddy --send ──> TCP:44556 ──> celebrate animation
- hooks/PermissionRequest ──> clawd-buddy --wave ──> TCP:44556 ──> wave animation
+Claude Code                                          Clawd Buddy
+-----------                                          -----------
+ hooks/UserPromptSubmit ──> clawd-buddy --prompt-start ──> TCP:44556 ──> greet (if new session) + thinking
+ hooks/Stop ─────────────> clawd-buddy --send ─────────> TCP:44556 ──> celebrate animation
+ hooks/PermissionRequest ──> clawd-buddy --wave ────────> TCP:44556 ──> wave animation
 ```
 
-1. **Claude Code hooks** fire shell commands when events happen (response done, permission needed).
-2. The `clawd-buddy --send` / `--wave` CLI connects to `127.0.0.1:44556` and sends a JSON action.
+1. **Claude Code hooks** fire shell commands when events happen
+   (prompt submitted, response done, permission needed).
+2. The `clawd-buddy --send` / `--wave` / `--prompt-start` CLI connects to
+   `127.0.0.1:44556` and sends a JSON action.
 3. The running buddy process receives the signal and plays the animation.
+   Incoming signals during an active animation are queued (FIFO, capped
+   at three) so attention requests are never silently dropped.
 
 ### Signal protocol
 
@@ -241,6 +278,15 @@ The buddy listens on a TCP socket (default port `44556`). Send a JSON payload to
 ```json
 {"action": "wave"}
 ```
+
+```json
+{"action": "prompt_start", "session_id": "abc-123"}
+```
+
+The `prompt_start` action is the wire-once handler for a Claude Code
+prompt: the running buddy greets when it sees a *new* `session_id` (or
+when none is supplied and there has been no recent activity) and starts
+the thinking animation either way.
 
 You can send signals from any language:
 
@@ -311,6 +357,30 @@ The buddy adds a system tray icon with a right-click menu:
 - Pulsing **yellow** border around the body
 - Warm two-note doorbell call (if Sound is enabled)
 - Duration: 5 seconds
+
+### Greet (first prompt of a new session)
+
+- Medium bobbing
+- Small happy arc eyes
+- Smaller smile
+- Right arm raised in a friendly hello
+- Pulsing **cyan** border around the body
+- Silent (audio is intentionally deferred to a later milestone)
+- Duration: ~1.8 seconds
+- Per-session de-duplication via Claude Code's `session_id`
+
+### Thinking (between `UserPromptSubmit` and `Stop`)
+
+- Slow, calm bobbing
+- Pupils sweep upward and side-to-side (a "considering" pose)
+- Three small pulsing dots float above the head
+- Soft **purple** border, gentler pulse than the other states
+- Silent
+- Holds indefinitely until `Stop` arrives (with a 10-minute safety cap
+  in case the assistant crashes or the network drops)
+
+> Reactions are **queued** while another animation is playing — up to
+> three pending events play back in the order they arrived.
 
 ## Configuration
 

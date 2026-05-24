@@ -1,6 +1,6 @@
 [project]
 name = "clawd-buddy"
-version = "0.1.10"
+version = "0.1.11"
 description = "Animated terminal pet that sits on your taskbar and reacts to AI coding assistant events"
 readme = "README.md"
 license = "MIT"
@@ -42,9 +42,22 @@ clawd-buddy = "clawd_buddy.app:main"
 [project.gui-scripts]
 clawd-buddyw = "clawd_buddy.app:main"
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/clawd_buddy"]
+
+[tool.pytest.ini_options]
+# `src/` layout means the package isn't importable from the repo root by
+# default. Adding it to pythonpath lets `pytest` work without an editable
+# install. `testpaths` keeps test discovery focused.
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"

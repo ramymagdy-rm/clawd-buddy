@@ -4,6 +4,64 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.11] - 2026-05-24
+
+### Added — Milestone 1: Full session arc
+
+- **Greeting animation** on the first prompt of a new Claude Code session.
+  Soft cyan border, smaller happy arc eyes, a friendly hello with the
+  right arm, ~1.8s. De-duplicated by Claude Code's `session_id` (passed
+  via the hook's stdin JSON), with a 30-minute idle fallback when no id
+  is available.
+- **Thinking animation** while the assistant is responding — between
+  `UserPromptSubmit` and the next `Stop`. Soft purple border with a
+  gentler pulse, pupils that sweep upward, and three pulsing dots above
+  the head. Holds indefinitely with a 10-minute safety cap.
+- **`--prompt-start`** CLI flag — the single wiring point users add for
+  the new `UserPromptSubmit` hook. Encapsulates the greet-if-new-session
+  behavior together with starting the thinking animation. Reads
+  `session_id` from piped JSON on stdin when run as a Claude Code hook
+  command.
+- **`--session-id ID`** CLI flag — composable override for
+  `--prompt-start`'s session id (useful for scripting and tests).
+- **Queued reactions** — incoming signals during an active animation are
+  now queued (FIFO, capped at three) instead of being silently dropped.
+  Previously a `PermissionRequest` arriving mid-celebrate was lost.
+- **Unit-test suite** (`tests/test_buddy_state.py`, 32 tests) covering
+  the state machine, queue semantics, preemption rules, session-greeting
+  dedup, and the thinking safety cap. `pyproject.toml` gains a
+  `[tool.pytest.ini_options]` block with `pythonpath = ["src"]` so
+  `pytest` works without an editable install. New `pytest` dev
+  dependency under `[project.optional-dependencies]`.
+
+### Changed
+
+- `BuddyState` is now a small state machine with explicit ambient
+  (`idle`, `thinking`) vs. reactive (`celebrating`, `waving`,
+  `greeting`) modes. Transitions go through a single `_request()`
+  dispatcher that handles preemption (celebrate/wave/greet preempt
+  thinking) and queueing (reactive-during-reactive is queued, not
+  dropped). The public `trigger()` / `wave()` API is unchanged — they
+  are now thin wrappers around `_request()`.
+- `BuddyState.__init__` accepts an optional `clock` callable for
+  deterministic time in tests.
+- Socket protocol gains four new actions: `prompt_start`, `greet`,
+  `thinking_start`, `thinking_end`. The existing `celebrate`, `wave`,
+  `raise`, and `quit` actions are unchanged.
+
+### Documentation
+
+- `README.md` updated: new hook wiring section (`UserPromptSubmit`),
+  new Animations entries for *Greet* and *Thinking*, updated signal
+  protocol diagram, CLI reference, and queue note.
+- `.ai/decisions/2026-05-24-milestone-1-session-arc.md` — full design
+  rationale for the milestone (mode taxonomy, queue cap, session-greet
+  heuristic, deferred audio decision).
+- `.ai/feature-map.md` — feature ↔ milestone ↔ code ↔ tests ↔ decision
+  map kept in sync with this release.
+- `.ai/brainstorming/2026-05-24-1706-brainstorm.md` — source of M1's
+  three feature decisions.
+
 ## [0.1.10] - 2026-05-24
 
 ### Added
