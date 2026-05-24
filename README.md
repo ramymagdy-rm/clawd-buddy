@@ -267,6 +267,30 @@ Claude Code                                          Clawd Buddy
    Incoming signals during an active animation are queued (FIFO, capped
    at three) so attention requests are never silently dropped.
 
+### Module layout
+
+```text
+src/clawd_buddy/
+├── app.py          # main() orchestration
+├── constants.py    # window dimensions, IPC port, transparency key
+├── state.py        # BuddyState — animation state machine + queue
+├── cli.py          # argparse setup + Claude Code hook stdin reader
+├── config.py       # ~/.config/clawd-buddy persistence
+├── ipc.py          # JSON-over-TCP protocol + dispatcher + client
+├── ui/
+│   ├── themes.py   # 8 color theme registry
+│   ├── sound.py    # procedural PCM sound-pack generators
+│   ├── drawing.py  # pygame draw routines (buddy + confetti)
+│   ├── about.py    # About dialog + shared buddy icon
+│   └── tray.py     # pystray icon + right-click menu
+└── platform/
+    ├── __init__.py # cross-platform facade
+    ├── _windows.py # Win32 ctypes (transparency, taskbar, autostart)
+    └── _linux.py   # X11 / XDG (window props, panel detection, .desktop)
+```
+
+Each module is independently importable and unit-tested (`tests/`).
+
 ### Signal protocol
 
 The buddy listens on a TCP socket (default port `44556`). Send a JSON payload to trigger actions:
