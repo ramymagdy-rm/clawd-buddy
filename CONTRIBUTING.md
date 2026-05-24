@@ -114,7 +114,47 @@ Everything lives in `app.py` to keep the package simple:
 
 ## Releasing
 
-When `develop` has been merged into `main` and tagged, publish to PyPI with:
+### 1. Bump the version
+
+The project version lives in `pyproject.toml` under `[project] version` and
+is read at runtime via `importlib.metadata.version("clawd-buddy")` — so
+**that one field is the single source of truth**. `bump-my-version` is
+configured in `.bumpversion.toml` to keep it in sync with its own
+`current_version`:
+
+```bash
+uvx bump-my-version bump patch    # 0.1.9 → 0.1.10
+uvx bump-my-version bump minor    # 0.1.9 → 0.2.0
+uvx bump-my-version bump major    # 0.1.9 → 1.0.0
+```
+
+`uvx` runs the tool in an ephemeral environment, no install required.
+The config sets `commit = false` and `tag = false` on purpose — version
+files are edited, but you handle the commit, CHANGELOG finalization, merge,
+and tag manually.
+
+### 2. Finalize the CHANGELOG
+
+Rename the unreleased section to the new version + today's date:
+
+```diff
+- ## [Unreleased]
++ ## [0.1.10] - 2026-MM-DD
+```
+
+### 3. Commit, merge, tag
+
+```bash
+git add pyproject.toml .bumpversion.toml CHANGELOG.md
+git commit -m "Release v0.1.10: <short summary>"
+git checkout main
+git merge develop --no-ff -m "Merge branch 'develop' for v0.1.10 release"
+git tag -a v0.1.10 -m "Release v0.1.10: <short summary>"
+git push origin main develop
+git push origin v0.1.10
+```
+
+### 4. Publish to PyPI
 
 ```bash
 rm -r dist; uv build && uv publish
