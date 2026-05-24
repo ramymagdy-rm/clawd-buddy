@@ -198,6 +198,7 @@ clawd-buddy --no-startup     Disable run at login/startup
 clawd-buddy --port PORT      Use a custom TCP port (default: 44556)
 clawd-buddy --no-topmost     Don't keep the window always-on-top
 clawd-buddy --fg             Run in foreground (skip auto-detach)
+clawd-buddy --version        Show version and exit
 clawd-buddy --help           Show help
 ```
 
@@ -267,6 +268,8 @@ The buddy adds a system tray icon with a right-click menu:
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
 - **Theme** — pick one of the 8 themes (current one is checked)
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
+- **Clawd Buddy vX.Y.Z** — informational version label (disabled)
+- **About** — open a small dialog with version, description, author, license, and a clickable repo link
 - **Quit** — close the buddy
 
 ### Autostart
