@@ -4,6 +4,44 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Notification sound packs** — pick the audio style from a new tray
+  **Sound** submenu. Four packs ship out of the box, plus an **Off** entry:
+  - `Fanfare` — motivational achievement: ascending C-major arpeggio that
+    lands on a full triad chord (celebrate) + warm two-note doorbell call
+    (wave).
+  - `Chime` — peaceful bell tones (fundamental + harmonics with
+    exponential decay).
+  - `Retro` — 8-bit square-wave coin-pickup flourish.
+  - `Minimal` — single short soft pip.
+- **Click-to-preview**: picking a pack from the submenu plays the
+  celebrate sound immediately so you can audition options without waiting
+  for the next event.
+- **Pulsing attention border** around the buddy body during attention
+  states: bright **green** while celebrating, warm **yellow** while
+  waving. Colors are fixed across all 8 themes so the meaning stays
+  consistent.
+
+### Changed
+
+- **Config key.** Sound preference now lives under
+  `config.json` ⇒ `{"sound_pack": "fanfare" | "chime" | "retro" |
+  "minimal" | "off"}`. The previous `{"sound": true|false}` key is
+  auto-migrated on first run (`false → "off"`, `true → "fanfare"`) and
+  dropped from the file.
+
+### Notes
+
+- Audio init is best-effort: on headless machines or sessions with no
+  audio device, the buddy logs a one-line warning and runs silently —
+  the visual attention border still works.
+- All pack PCM is synthesized at startup with `pygame.mixer` (raised-cosine
+  envelopes, stereo int16); no audio files are bundled. Adding a new pack
+  is a matter of registering two PCM-builder functions in `SOUND_PACKS`.
+
 ## [0.1.6] - 2026-04-19
 
 ### Added
