@@ -426,6 +426,37 @@ class TestReminderQuietHoursPref:
         assert s == 23 * 60
 
 
+class TestReminderAnchorPref:
+    """M4.3: daily anchor (minutes-from-midnight) persisted under
+    `reminder.anchor_minute`. Defaults to 08:00 when missing."""
+
+    def test_default_is_eight_am(self, isolated_config_dir):
+        assert (config.load_saved_reminder_anchor_minute()
+                == 8 * 60)
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_reminder_anchor_minute_pref(13 * 60 + 30)
+        assert (config.load_saved_reminder_anchor_minute()
+                == 13 * 60 + 30)
+
+    def test_save_rejects_out_of_range(self, isolated_config_dir):
+        config.save_reminder_anchor_minute_pref(-1)
+        assert not (isolated_config_dir / "config.json").exists()
+        config.save_reminder_anchor_minute_pref(1440)
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_save_rejects_non_int(self, isolated_config_dir):
+        config.save_reminder_anchor_minute_pref("09:00")
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_load_corrupt_falls_back_to_default(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"reminder": {"anchor_minute": "garbage"}}))
+        assert (config.load_saved_reminder_anchor_minute()
+                == 8 * 60)
+
+
 class TestReminderPublicSurface:
     def test_intervals_are_sorted_and_distinct(self):
         assert config.REMINDER_INTERVALS == tuple(
@@ -437,3 +468,6 @@ class TestReminderPublicSurface:
         for sec in config.REMINDER_INTERVALS:
             assert sec in config.REMINDER_INTERVAL_LABELS
             assert config.REMINDER_INTERVAL_LABELS[sec]
+
+    def test_anchor_default_present(self):
+        assert config.DEFAULT_REMINDER_ANCHOR_MINUTE == 8 * 60

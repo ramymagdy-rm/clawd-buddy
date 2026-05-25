@@ -31,14 +31,31 @@ class FakeClock:
         self.t += s
 
 
+class FakeNowMin:
+    def __init__(self, minute=8 * 60):
+        self.minute = minute
+
+    def __call__(self):
+        return self.minute
+
+    def set(self, minute):
+        self.minute = minute
+
+
 @pytest.fixture
 def clock():
     return FakeClock()
 
 
 @pytest.fixture
-def state(clock):
-    return BuddyState(theme_name="dark", sound_pack="off", clock=clock)
+def now_min():
+    return FakeNowMin(minute=8 * 60)
+
+
+@pytest.fixture
+def state(clock, now_min):
+    return BuddyState(theme_name="dark", sound_pack="off", clock=clock,
+                      now_min_fn=now_min)
 
 
 def _free_port():
@@ -284,23 +301,26 @@ class TestFormatHHMM:
 
 # ── Drank action + reminder status block (M4) ────────────────────────
 class TestDrankAction:
-    def test_drank_acknowledges_reminder(self, state, clock):
+    def test_drank_acknowledges_reminder(self, state, now_min):
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        now_min.set(9 * 60)
         state.update()
         assert state.reminder_active is True
         ipc.dispatch_action(state, "drank")
         assert state.reminder_active is False
 
-    def test_drank_resets_timer_even_without_active_alarm(self, state, clock):
+    def test_drank_does_not_shift_schedule(self, state, now_min):
+        # M4.3: drinking ack only dismisses; the next slot still fires.
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(120)  # 2 minutes in
+        now_min.set(9 * 60)
+        state.update()
         ipc.dispatch_action(state, "drank")
-        # Timer reset — seconds-until-next ≈ full interval.
-        secs = state.reminder_seconds_until_next()
-        assert abs(secs - state.reminder_interval) < 1
+        # Countdown points at the next slot (10:00), not "interval from now".
+        assert state.reminder_seconds_until_next() == 60 * 60
 
     def test_drank_records_last_action(self, state):
         ipc.dispatch_action(state, "drank")
@@ -315,7 +335,8 @@ class TestStatusReminderBlock:
         resp = ipc.build_status_response(state)
         assert "reminder" in resp
         block = resp["reminder"]
-        for key in ("enabled", "interval_seconds", "sound",
+        # `anchor` joined the block in M4.3.
+        for key in ("enabled", "interval_seconds", "anchor", "sound",
                     "quiet_hours", "active", "seconds_until_next"):
             assert key in block
 
@@ -324,6 +345,7 @@ class TestStatusReminderBlock:
         block = resp["reminder"]
         assert block["enabled"] is False
         assert block["interval_seconds"] == 60 * 60
+        assert block["anchor"] == "08:00"  # M4.3 default
         assert block["sound"] == "water"
         # Default quiet hours are 23:00–08:00.
         assert block["quiet_hours"] == {"start": "23:00", "end": "08:00"}
@@ -345,10 +367,11 @@ class TestStatusReminderBlock:
         assert isinstance(block["seconds_until_next"], int)
         assert block["seconds_until_next"] > 0
 
-    def test_reminder_block_when_active(self, state, clock):
+    def test_reminder_block_when_active(self, state, now_min):
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        now_min.set(9 * 60)
         state.update()
         block = ipc.build_status_response(state)["reminder"]
         assert block["active"] is True
