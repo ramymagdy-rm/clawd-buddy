@@ -4,6 +4,53 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.18] - 2026-05-25
+
+### Changed — Milestone 4.3: scheduled water reminders
+
+The water reminder switched from **"every N from the last drink"** to a
+**wall-clock schedule**. A new `Start reminders at` HH:MM scroll in the
+Reminders tab sets the daily anchor; reminders then fire at
+`anchor, anchor+interval, anchor+2*interval, …` for the rest of the
+local day. Example: anchor 09:00, interval 1 h ⇒ reminders at 09:00,
+10:00, 11:00, … until end-of-day, restarting at 09:00 tomorrow.
+
+- **New control:** *Start reminders at* HH:MM combobox (same widget
+  shape as the quiet-hours scrolls, 30-min steps). Sits between the
+  interval and sound pickers in the Reminders tab.
+- **Same interval presets** (`30 min` / `1 h` / `1.5 h` / `2 h` /
+  `4 h`) — kept from M4.2 as the natural set of "every-N" choices.
+- **Drinking ack no longer shifts the schedule.** Pressing Space (or
+  using the tray "I drank water" entry, or `--drank`) dismisses the
+  current alarm only — the next slot still fires on time, even if
+  the user drinks 30 seconds after the alarm.
+- **Quiet hours still silence slots inside the window.** The slot
+  tracker advances silently through them, so on exit the next *future*
+  slot is what fires (not every slot they were meant to sleep through).
+- **Missed slots are caught up.** If the buddy hadn't ticked yet when
+  a slot's wall-clock time passed (e.g. enabled at 07:30, next tick at
+  08:30 with anchor 08:00), the missed slot fires on the next tick
+  rather than being silently skipped.
+- **Config schema** gains `reminder.anchor_minute` (minutes-from-
+  midnight, default 480 = 08:00). Out-of-range / non-int values fall
+  back to the default; existing configs without the key continue to
+  load with the 08:00 default — no migration needed.
+- **`--status` payload** `reminder` block gains an `anchor` field
+  (HH:MM string).
+
+### Documentation
+
+- `.ai/decisions/2026-05-25-milestone-4.3-scheduled-reminders.md` —
+  design note covering why the schedule moved from elapsed-since-
+  drink to wall-clock slots, the slot-tracker dedup model, and the
+  three subtle edge cases (catch-up after a late tick, quiet-hours
+  slot consumption, drink-ack doesn't shift schedule).
+- `README.md` — Water-reminder section gains a "Start reminders at"
+  row; quiet-hours wording updated to reflect "silence slots inside
+  the window" rather than "interval doesn't accumulate".
+- `.ai/feature-map.md` and `.ai/roadmap.md` — new Milestone 4.3 row
+  marked shipped.
+
 ## [0.1.17] - 2026-05-25
 
 ### Changed — Milestone 4 polish

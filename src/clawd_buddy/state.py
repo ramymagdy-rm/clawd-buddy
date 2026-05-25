@@ -96,6 +96,15 @@ DEFAULT_REMINDER_INTERVAL = REMINDER_INTERVAL_1H
 DEFAULT_REMINDER_QUIET_START = 23 * 60
 DEFAULT_REMINDER_QUIET_END = 8 * 60
 
+# M4.3: the daily anchor (minutes-from-midnight) that the reminder
+# schedule cycles from. Reminders fire at anchor, anchor+interval,
+# anchor+2*interval, … up to end-of-day, then restart at the anchor
+# the next day. Defaults to 08:00 local — the natural "start of the
+# day" for a wellness nudge, and far enough from the default quiet-
+# hours boundary (also 08:00) that the first slot lands the moment
+# the quiet window ends.
+DEFAULT_REMINDER_ANCHOR_MINUTE = 8 * 60
+
 # Default text shown in the speech bubble while the reminder is firing.
 # Short, ASCII-only (pygame's default font doesn't carry emoji).
 REMINDER_BUBBLE_TEXT = "Drink water!"
@@ -158,6 +167,37 @@ def _normalize_reminder_interval(seconds):
     return DEFAULT_REMINDER_INTERVAL
 
 
+def _normalize_anchor_minute(minutes):
+    """Coerce a daily-anchor value (minutes-from-midnight) into a valid
+    integer in [0, 1440). Non-numeric / out-of-range input falls back
+    to the 08:00 default — a corrupt config must never silently shift
+    the user's schedule into a surprising time."""
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return DEFAULT_REMINDER_ANCHOR_MINUTE
+    if not (0 <= minutes < 1440):
+        return DEFAULT_REMINDER_ANCHOR_MINUTE
+    return minutes
+
+
+def _latest_slot_at_or_before(anchor_min, interval_min, now_min):
+    """Return the latest scheduled slot (minutes-from-midnight) that
+    has occurred at or before `now_min` *today*, or `None` if `now_min`
+    is before the day's anchor.
+
+    Slots are `anchor + N*interval` while < 1440. The function does
+    not look at yesterday's tail (slots are not allowed to leak across
+    midnight — see design note); `None` means "no slot has fired yet
+    today", which is the correct outcome for a buddy launched before
+    the first reminder.
+    """
+    if now_min < anchor_min:
+        return None
+    n = (now_min - anchor_min) // interval_min
+    return anchor_min + n * interval_min
+
+
 def _in_quiet_window(start, end, now_min):
     """Return True if `now_min` (minutes-from-midnight) falls inside
     the [start, end) window. Handles wraparound: when start > end
@@ -195,10 +235,18 @@ class BuddyState:
                  reminder_interval=DEFAULT_REMINDER_INTERVAL,
                  reminder_sound=None,
                  reminder_quiet_start=DEFAULT_REMINDER_QUIET_START,
-                 reminder_quiet_end=DEFAULT_REMINDER_QUIET_END):
+                 reminder_quiet_end=DEFAULT_REMINDER_QUIET_END,
+                 reminder_anchor_minute=DEFAULT_REMINDER_ANCHOR_MINUTE,
+                 now_min_fn=None):
         # `clock` indirection so unit tests can advance time without
         # actually sleeping. Defaults to time.time at runtime.
         self._clock = clock if clock is not None else time.time
+        # `now_min_fn` is the separate testing seam for "what minute
+        # of the local day is it?" — the M4.3 schedule is wall-clock
+        # anchored, so tests that drive _tick_reminder need to set
+        # the current minute-of-day independently of the unix-epoch
+        # clock. Production reads time.localtime() (TZ-aware).
+        self._now_min_fn = now_min_fn
         self.mode = "idle"
         self.mode_start = 0.0
         self.cel_dur = DEFAULT_CEL_DUR
@@ -292,17 +340,24 @@ class BuddyState:
         (self.reminder_quiet_start,
          self.reminder_quiet_end) = _normalize_quiet(
             reminder_quiet_start, reminder_quiet_end)
-        # Start the clock from "now" so the buddy doesn't fire immediately
-        # when the user toggles the reminder on.
+        # M4.3: the daily anchor that the schedule cycles from. Combined
+        # with `reminder_interval`, it produces the set of wall-clock
+        # slots the buddy fires at (08:00, 09:00, 10:00, … for an
+        # 08:00 anchor + 1h interval).
+        self.reminder_anchor_minute = _normalize_anchor_minute(
+            reminder_anchor_minute)
+        # `_last_drink_ts` remains the producer-side mark for status
+        # output; the M4.3 schedule no longer reads it for firing.
         self._last_drink_ts = self._clock()
         self.reminder_active = False
         self._pending_reminder_sound = None
-        # Tracks the previous tick's quiet-hours state so we can detect
-        # the transition out of quiet hours and reset the timer at that
-        # moment (otherwise a 1h reminder set at 22:00 with quiet hours
-        # 23–08 would fire at 08:00 sharp every morning, which is the
-        # exact noise the quiet window was supposed to avoid).
-        self._reminder_was_quiet = False
+        # M4.3 scheduling: track the most-recent slot we've already
+        # fired today so each slot fires exactly once. (`day_key` is
+        # the `(year, yday)` pair returned by time.localtime so we
+        # detect rollovers across midnight without re-deriving from
+        # the unix clock).
+        self._last_fired_slot_min = None
+        self._last_fired_day_key = None
 
     # ── Sound ────────────────────────────────────────────────────
     @property
@@ -364,27 +419,50 @@ class BuddyState:
     def set_reminder_enabled(self, enabled):
         """Toggle the water-drinking reminder.
 
-        Enabling restarts the timer from "now" so a fresh enable
-        doesn't fire immediately. Disabling clears any active alarm —
-        we don't want to leave a stuck reminder visible after the user
-        explicitly turned the feature off."""
+        Enabling rebases the per-day slot tracker on "this moment" so
+        the user doesn't immediately get reminders for every slot that
+        already passed today — only the next future slot fires.
+        Disabling clears any active alarm — we don't want to leave a
+        stuck reminder visible after the user explicitly turned the
+        feature off."""
         enabled = bool(enabled)
         self.reminder_enabled = enabled
         if enabled:
-            self._last_drink_ts = self._clock()
-            self._reminder_was_quiet = self.is_reminder_quiet_now()
+            # Pretend the most-recent past slot has already fired so
+            # only future slots produce an alarm. (`None` would mean
+            # "first slot of the day hasn't fired yet" — which would
+            # catch up every missed slot the instant we enable.)
+            now = self._clock()
+            now_min = self._get_now_min(now)
+            interval_min = self.reminder_interval // 60
+            self._last_fired_slot_min = _latest_slot_at_or_before(
+                self.reminder_anchor_minute, interval_min, now_min)
+            self._last_fired_day_key = self._get_day_key(now)
+            self._last_drink_ts = now
         else:
             self._dismiss_reminder()
 
     def set_reminder_interval(self, seconds):
-        """Pick one of `REMINDER_INTERVALS`. Resets the timer so the
-        new interval is honoured immediately — a user dialling down
-        from 4h to 30m shouldn't have to wait the remainder of a 4h
-        window before the change takes effect."""
+        """Pick one of `REMINDER_INTERVALS` (M4 preset set; M4.3 kept
+        the presets and added the daily anchor on top). Resets the
+        per-day slot tracker so the new schedule is honoured
+        immediately — a user changing 4h to 30m at 09:15 should see
+        the 09:30 slot fire, not be held to the 4h schedule that was
+        already in flight."""
         new_interval = _normalize_reminder_interval(seconds)
         if new_interval == self.reminder_interval:
             return
         self.reminder_interval = new_interval
+        # Re-rebase against the same "ignore past slots" rule as
+        # set_reminder_enabled — moving to a finer-grained interval
+        # mid-day shouldn't dump every retroactive slot on the user.
+        if self.reminder_enabled:
+            now = self._clock()
+            now_min = self._get_now_min(now)
+            interval_min = self.reminder_interval // 60
+            self._last_fired_slot_min = _latest_slot_at_or_before(
+                self.reminder_anchor_minute, interval_min, now_min)
+            self._last_fired_day_key = self._get_day_key(now)
         self._last_drink_ts = self._clock()
 
     def set_reminder_sound(self, name):
@@ -400,8 +478,41 @@ class BuddyState:
         quiet-hours — see the M4 design note for why."""
         (self.reminder_quiet_start,
          self.reminder_quiet_end) = _normalize_quiet(start, end)
-        # Re-check the quiet flag so the next tick reads the new window.
-        self._reminder_was_quiet = self.is_reminder_quiet_now()
+
+    def set_reminder_anchor_minute(self, minutes):
+        """Set the daily anchor (minutes-from-midnight) that the
+        reminder schedule cycles from. Resets the per-day slot tracker
+        so the next slot at or after the new anchor fires when it's
+        reached — a user moving the anchor from 08:00 to 13:00 at
+        14:30 should see a reminder *now* (the 13:00 slot has
+        passed), not be told to wait until tomorrow."""
+        new_anchor = _normalize_anchor_minute(minutes)
+        if new_anchor == self.reminder_anchor_minute:
+            return
+        self.reminder_anchor_minute = new_anchor
+        self._last_fired_slot_min = None
+        self._last_fired_day_key = None
+
+    def _get_now_min(self, now=None):
+        """Return the current minute-of-day (0–1439). Production reads
+        `time.localtime()`; tests override via the `now_min_fn`
+        constructor parameter so the wall-clock schedule is
+        deterministic across timezones."""
+        if self._now_min_fn is not None:
+            return self._now_min_fn()
+        if now is None:
+            now = self._clock()
+        lt = time.localtime(now)
+        return lt.tm_hour * 60 + lt.tm_min
+
+    def _get_day_key(self, now=None):
+        """Day identifier for slot-dedup. `(year, yday)` survives
+        leap-year and TZ-shift edge cases that a raw date string
+        would muddle."""
+        if now is None:
+            now = self._clock()
+        lt = time.localtime(now)
+        return (lt.tm_year, lt.tm_yday)
 
     def is_reminder_quiet_now(self, now_min=None):
         """True iff the reminder's quiet-hours window is configured AND
@@ -417,21 +528,45 @@ class BuddyState:
             self.reminder_quiet_start, self.reminder_quiet_end, now_min)
 
     def reminder_seconds_until_next(self):
-        """How long until the next reminder fires. Negative when overdue;
-        `None` when the reminder is disabled. Used by the About-window's
-        live status label and surfaced in `--status`."""
+        """Seconds until the next scheduled slot fires. 0 when an
+        alarm is currently active; `None` when the reminder is
+        disabled. Used by the About-window live status label and
+        surfaced in `--status`.
+
+        M4.3: derived from the wall-clock schedule (anchor + N*interval)
+        rather than from elapsed-since-last-drink. The result still
+        reads naturally — "next reminder in 27 min" — but it tracks
+        the user's chosen time-of-day, not their last sip."""
         if not self.reminder_enabled:
             return None
         if self.reminder_active:
             return 0
-        elapsed = self._clock() - self._last_drink_ts
-        return self.reminder_interval - elapsed
+        now_min = self._get_now_min()
+        interval_min = self.reminder_interval // 60
+        anchor = self.reminder_anchor_minute
+        if now_min < anchor:
+            # First slot of the day is the anchor itself.
+            return (anchor - now_min) * 60
+        delta = now_min - anchor
+        # Next slot in the future (strictly greater than now). When the
+        # clock is *exactly* on a slot, the +1 picks the slot after it
+        # so we don't report "in 0 s" for a slot that's about to fire.
+        n = delta // interval_min + 1
+        next_slot = anchor + n * interval_min
+        if next_slot < 1440:
+            return (next_slot - now_min) * 60
+        # Past the last slot of today — next is tomorrow's anchor.
+        return (1440 - now_min + anchor) * 60
 
     def drink_acknowledged(self):
-        """User confirmed they drank — dismiss any active alarm and
-        reset the interval clock. Routed through here from Space,
-        the tray "I drank water" entry, and the IPC `drank` action so
-        external integrations (smart bottle, etc.) ack identically."""
+        """User confirmed they drank — dismiss any active alarm.
+
+        M4.3: this no longer shifts the schedule. The next reminder
+        still fires at its scheduled wall-clock slot; drinking only
+        clears the current alarm and refreshes `_last_drink_ts` for
+        status reporting. Routed through here from Space, the tray
+        "I drank water" entry, and the IPC `drank` action so external
+        integrations (smart bottle, etc.) ack identically."""
         self._dismiss_reminder()
         self._last_drink_ts = self._clock()
 
@@ -452,13 +587,20 @@ class BuddyState:
     def _tick_reminder(self, now):
         """Per-frame reminder check. Called from `update()`.
 
+        M4.3 schedule: reminders fire at wall-clock slots
+        `anchor, anchor+interval, anchor+2*interval, …` until the end
+        of the local day, then restart at the anchor the next day.
+        Each slot fires at most once per day (tracked by
+        `_last_fired_slot_min` + `_last_fired_day_key`).
+
         Quiet-hours interaction:
-          - In quiet hours: do not fire. Continually slide `_last_drink_ts`
-            forward so the timer doesn't accumulate during the night;
-            the moment we exit quiet hours, the user gets a full
-            interval before the first alarm.
-          - Outside quiet hours: fire when the elapsed time crosses the
-            interval and the alarm isn't already active.
+          - In quiet hours: do not fire. Advance the slot tracker to
+            the latest slot that's already inside the quiet window so
+            the moment we exit, the next *future* slot is the one
+            that fires (not every slot the user was supposed to sleep
+            through).
+          - Outside quiet hours: fire the latest slot we haven't
+            already fired today.
 
         Already-active alarms stay active across quiet-hours
         boundaries — silencing a firing alarm because the clock crossed
@@ -466,38 +608,52 @@ class BuddyState:
         """
         if not self.reminder_enabled:
             return
-        quiet = self.is_reminder_quiet_now()
-        if quiet:
-            if not self.reminder_active:
-                # During quiet hours the timer doesn't accumulate.
-                self._last_drink_ts = now
-            self._reminder_was_quiet = True
-            return
-        if self._reminder_was_quiet:
-            # Transition out of quiet hours — start the interval fresh.
-            self._last_drink_ts = now
-            self._reminder_was_quiet = False
-            return
+
+        now_min = self._get_now_min(now)
+        day_key = self._get_day_key(now)
+
+        # New local day ⇒ wipe the per-day fired-slot tracker. Without
+        # this, an alarm fired at yesterday's 22:00 would block today's
+        # equivalent slot from firing.
+        if self._last_fired_day_key != day_key:
+            self._last_fired_slot_min = None
+            self._last_fired_day_key = day_key
+
         if self.reminder_active:
             # Restore the reminder bubble if a `set_message` cleared
             # it (e.g. a `--message "deploy done"` that just expired).
-            # We don't overwrite a *currently visible* user bubble —
-            # the message wins briefly, the reminder returns when
-            # their bubble expires.
             if not self.bubble_text:
                 self.bubble_text = REMINDER_BUBBLE_TEXT
                 self._bubble_expiry = now + 365 * 24 * 3600
             return
-        if now - self._last_drink_ts >= self.reminder_interval:
-            self.reminder_active = True
-            if self.reminder_sound != REMINDER_SOUND_OFF:
-                self._pending_reminder_sound = self.reminder_sound
-            # Show the reminder bubble. Far-future expiry rather than
-            # re-piping every frame; `_dismiss_reminder` clears it,
-            # the active-branch above restores it if a user message
-            # ate it.
-            self.bubble_text = REMINDER_BUBBLE_TEXT
-            self._bubble_expiry = now + 365 * 24 * 3600
+
+        interval_min = self.reminder_interval // 60
+        latest_slot = _latest_slot_at_or_before(
+            self.reminder_anchor_minute, interval_min, now_min)
+
+        if latest_slot is None:
+            return  # before today's first scheduled slot
+
+        if self.is_reminder_quiet_now(now_min=now_min):
+            # Don't fire, but consume the slot so we don't catch up
+            # the moment the quiet window ends.
+            self._last_fired_slot_min = latest_slot
+            return
+
+        if (self._last_fired_slot_min is not None
+                and latest_slot <= self._last_fired_slot_min):
+            return  # already fired this slot
+
+        # Fire.
+        self._last_fired_slot_min = latest_slot
+        self.reminder_active = True
+        if self.reminder_sound != REMINDER_SOUND_OFF:
+            self._pending_reminder_sound = self.reminder_sound
+        # Far-future expiry rather than re-piping every frame;
+        # `_dismiss_reminder` clears it, the active-branch above
+        # restores it if a user message ate it.
+        self.bubble_text = REMINDER_BUBBLE_TEXT
+        self._bubble_expiry = now + 365 * 24 * 3600
 
     # ── Mode introspection (used by drawing and tests) ───────────
     @property
