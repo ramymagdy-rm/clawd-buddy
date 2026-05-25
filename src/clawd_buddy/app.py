@@ -47,6 +47,7 @@ from .cli import parse_args, read_hook_stdin
 from .config import (
     load_saved_quiet_hours,
     load_saved_reduce_motion,
+    load_saved_reminder_anchor_minute,
     load_saved_reminder_enabled,
     load_saved_reminder_interval,
     load_saved_reminder_quiet_hours,
@@ -239,6 +240,7 @@ def main():
         reminder_sound=load_saved_reminder_sound(),
         reminder_quiet_start=saved_reminder_qs,
         reminder_quiet_end=saved_reminder_qe,
+        reminder_anchor_minute=load_saved_reminder_anchor_minute(),
     )
     state.topmost = topmost
 

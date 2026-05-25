@@ -195,6 +195,7 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
     reminder_block = {
         "enabled": bool(state.reminder_enabled),
         "interval_seconds": int(state.reminder_interval),
+        "anchor": _format_hhmm(state.reminder_anchor_minute),
         "sound": state.reminder_sound,
         "quiet_hours": reminder_quiet,
         "active": bool(state.reminder_active),

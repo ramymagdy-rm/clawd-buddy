@@ -25,6 +25,7 @@ from .. import __version__ as APP_VERSION
 from ..config import (
     REMINDER_INTERVALS,
     REMINDER_INTERVAL_LABELS,
+    save_reminder_anchor_minute_pref,
     save_reminder_enabled_pref,
     save_reminder_interval_pref,
     save_reminder_quiet_hours_pref,
@@ -322,6 +323,33 @@ def _build_reminders_tab(notebook, state, root):
 
     interval_combo.bind("<<ComboboxSelected>>", on_interval_change)
 
+    # ── Daily start time (HH:MM) ───────────────────────────────
+    # M4.3 anchor — the wall-clock minute the schedule cycles from.
+    # Same HH:MM combobox shape (30-min steps) as the quiet-hours
+    # selectors. With interval=1h and start=09:00, reminders fire at
+    # 09:00, 10:00, 11:00 … through the day.
+    tk.Label(frame, text="Start reminders at:",
+             font=("Segoe UI", 9, "bold")).pack(anchor="w")
+    anchor_var = tk.StringVar(
+        value=_minutes_to_hhmm(state.reminder_anchor_minute))
+    anchor_combo = ttk.Combobox(
+        frame, values=_HHMM_OPTIONS, textvariable=anchor_var,
+        state="readonly", width=7)
+    anchor_combo.pack(anchor="w", pady=(2, 10))
+
+    def on_anchor_change(_event=None):
+        m = _hhmm_to_minutes(anchor_var.get())
+        if m is None:
+            # Readonly combobox shouldn't emit garbage; snap back if
+            # somehow it does rather than persisting an unparseable
+            # anchor.
+            anchor_var.set(_minutes_to_hhmm(state.reminder_anchor_minute))
+            return
+        state.set_reminder_anchor_minute(m)
+        save_reminder_anchor_minute_pref(m)
+
+    anchor_combo.bind("<<ComboboxSelected>>", on_anchor_change)
+
     # ── Sound combobox ─────────────────────────────────────────
     tk.Label(frame, text="Reminder sound:",
              font=("Segoe UI", 9, "bold")).pack(anchor="w")
@@ -401,6 +429,7 @@ def _build_reminders_tab(notebook, state, root):
         st = "normal" if enabled_var.get() else "disabled"
         combo_st = "readonly" if enabled_var.get() else "disabled"
         interval_combo.configure(state=combo_st)
+        anchor_combo.configure(state=combo_st)
         sound_combo.configure(state=combo_st)
         quiet_start.configure(state=combo_st)
         quiet_end.configure(state=combo_st)

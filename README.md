@@ -81,6 +81,7 @@ from the **About → Reminders** tab where every preference lives:
 | Setting | Options |
 | --- | --- |
 | **Interval** | `30 min`, `1 h` (default), `1.5 h`, `2 h`, `4 h` — picked from a scrolling dropdown directly under the **Remind me to drink water** checkbox |
+| **Start reminders at** | HH:MM combobox (30-min steps, default **08:00**). The day's schedule cycles from this anchor: with start=09:00 and interval=1 h, reminders land at 09:00, 10:00, 11:00, … |
 | **Sound** | `water` (default — high-pitched bell), `chime` (calmer two-bell pair), `beep` (square-wave triple-blip), or `off` for visual-only |
 | **Quiet hours** | Default **23:00–08:00**, edited via HH:MM comboboxes in 30-min increments. Pick the same time for both endpoints to disable. |
 
@@ -88,18 +89,20 @@ When the reminder fires:
 
 - The chosen sound plays once (no looping nag).
 - The buddy shows a **"Drink water!"** speech bubble until you ack.
-- **Press Space** to acknowledge — the bubble clears and the timer
-  resets. Space keeps its old "test celebration" meaning at every
+- **Press Space** to acknowledge — the bubble clears. The *next*
+  scheduled slot still fires on time (drinking ack doesn't shift the
+  schedule). Space keeps its old "test celebration" meaning at every
   other moment, so you haven't lost the shortcut.
 - Or click **I drank water** in the tray menu (visible only while an
   alarm is active).
 - Or signal externally: `clawd-buddy --drank` works the same way for
   smart-bottle integrations, wrist macros, or scripts.
 
-Inside quiet hours the timer doesn't tick — you wake up to a full
-interval, not a 7am water-spam. Reminder prefs persist under a
-`reminder` block in `config.json` (`enabled`, `interval`, `sound`,
-`quiet_hours`).
+Inside quiet hours the buddy silently consumes the scheduled slots —
+on exit, only the next *future* slot fires, not every slot you were
+meant to sleep through. Reminder prefs persist under a `reminder`
+block in `config.json` (`enabled`, `interval`, `anchor_minute`,
+`sound`, `quiet_hours`).
 
 ### Themes
 
@@ -402,6 +405,7 @@ $ clawd-buddy --status
   "reminder": {
     "enabled": true,
     "interval_seconds": 3600,
+    "anchor": "08:00",
     "sound": "water",
     "quiet_hours": {"start": "23:00", "end": "08:00"},
     "active": false,
@@ -411,8 +415,9 @@ $ clawd-buddy --status
 ```
 
 `reduce_motion`, `volume`, and `quiet_hours` were added in v0.1.15;
-the `reminder` block was added in v0.1.16. Both `quiet_hours` keys
-are `null` when their respective window is disabled;
+the `reminder` block was added in v0.1.16; `reminder.anchor` (the daily
+schedule start time) was added in v0.1.18. Both `quiet_hours` keys are
+`null` when their respective window is disabled;
 `reminder.seconds_until_next` is `null` when the reminder is off and
 `0` when an alarm is firing.
 
@@ -450,7 +455,7 @@ The buddy adds a system tray icon with a right-click menu:
   - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.
 - **Reduce Motion** — accessibility toggle. When checked, the buddy stops bobbing, swinging limbs, and spawning confetti; the colored attention border and sounds remain.
 - **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, quiet hours) lives in **About… → Reminders**.
-- **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss + reset timer.
+- **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss the current alarm. The next scheduled slot still fires on time.
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
 - **About…** — open a tabbed dialog: **About** (version / repo / author) and **Reminders** (edit interval, sound, and quiet hours; live countdown; "Drank now" button).
 - **Quit** — close the buddy

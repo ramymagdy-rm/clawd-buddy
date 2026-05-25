@@ -281,6 +281,9 @@ REMINDER_INTERVAL_LABELS = {
 DEFAULT_REMINDER_INTERVAL = REMINDER_INTERVAL_1H
 DEFAULT_REMINDER_QUIET_START = 23 * 60
 DEFAULT_REMINDER_QUIET_END = 8 * 60
+# M4.3: daily anchor (minutes-from-midnight) the schedule cycles
+# from — see `state.DEFAULT_REMINDER_ANCHOR_MINUTE` for the why.
+DEFAULT_REMINDER_ANCHOR_MINUTE = 8 * 60
 
 
 def _reminder_block(cfg=None):
@@ -387,6 +390,34 @@ def save_reminder_sound_pref(name):
     if name not in REMINDER_SOUND_CHOICES:
         return
     _save_reminder_field("sound", name)
+
+
+def load_saved_reminder_anchor_minute():
+    """Return the persisted daily-anchor minute (0–1439), defaulting
+    to 08:00. Out-of-range or non-int values fall back to the default
+    so a hand-edited config can't shift the schedule into a surprising
+    time silently."""
+    raw = _reminder_block().get("anchor_minute")
+    try:
+        raw = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_REMINDER_ANCHOR_MINUTE
+    if not (0 <= raw < 1440):
+        return DEFAULT_REMINDER_ANCHOR_MINUTE
+    return raw
+
+
+def save_reminder_anchor_minute_pref(minutes):
+    """Persist the daily-anchor minute. Out-of-range / non-int input
+    is a no-op (a typo elsewhere shouldn't silently wipe a working
+    anchor)."""
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return
+    if not (0 <= minutes < 1440):
+        return
+    _save_reminder_field("anchor_minute", minutes)
 
 
 def save_reminder_quiet_hours_pref(start, end):

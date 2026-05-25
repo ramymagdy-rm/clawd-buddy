@@ -32,16 +32,41 @@ class FakeClock:
         self.t += seconds
 
 
+class FakeNowMin:
+    """Mutable minute-of-day source for reminder-schedule tests.
+
+    The M4.3 reminder schedule is wall-clock anchored — tests need to
+    set the current minute-of-day independently of the unix-epoch
+    `FakeClock`. Pass an instance as `now_min_fn=` to BuddyState and
+    advance it with `.set(...)`."""
+
+    def __init__(self, minute=0):
+        self.minute = minute
+
+    def __call__(self):
+        return self.minute
+
+    def set(self, minute):
+        self.minute = minute
+
+
 @pytest.fixture
 def clock():
     return FakeClock()
 
 
 @pytest.fixture
-def state(clock):
+def now_min():
+    return FakeNowMin(minute=8 * 60)  # 08:00 default — matches anchor default
+
+
+@pytest.fixture
+def state(clock, now_min):
     # sound_pack="off" so transitions don't leave _pending_sound set —
-    # easier to assert on pristine state.
-    return buddy_state.BuddyState(theme_name="dark", sound_pack="off", clock=clock)
+    # easier to assert on pristine state. `now_min_fn` makes the M4.3
+    # wall-clock schedule deterministic across timezones.
+    return buddy_state.BuddyState(theme_name="dark", sound_pack="off",
+                                  clock=clock, now_min_fn=now_min)
 
 
 # ── Initial state ────────────────────────────────────────────────────
@@ -680,6 +705,10 @@ class TestReminderDefaults:
     def test_default_sound_is_water(self, state):
         assert state.reminder_sound == "water"
 
+    def test_default_anchor_is_eight_am(self, state):
+        # M4.3: schedule cycles from 08:00 by default.
+        assert state.reminder_anchor_minute == 8 * 60
+
     def test_default_quiet_hours_are_23_to_8(self, state):
         assert state.reminder_quiet_start == 23 * 60
         assert state.reminder_quiet_end == 8 * 60
@@ -692,21 +721,30 @@ class TestReminderDefaults:
 
 
 class TestReminderSetters:
-    def test_set_enabled_starts_timer_from_now(self, state, clock):
-        # Pre-existing _last_drink_ts (init time)
-        clock.advance(500)
+    def test_set_enabled_rebases_slot_tracker(self, state, clock, now_min):
+        # Default anchor 08:00, default interval 1h. now=09:15.
+        # Enabling should mark the 09:00 slot as already fired so the
+        # NEXT firing is 10:00 — not retroactive for 08:00 + 09:00.
+        now_min.set(9 * 60 + 15)
         state.set_reminder_enabled(True)
-        # Timer should have reset to "now" — seconds-until-next equals interval.
-        secs = state.reminder_seconds_until_next()
-        assert abs(secs - state.reminder_interval) < 1
+        # _last_fired_slot_min should be 09:00 (the latest slot at or
+        # before now), so the next slot the tick produces is 10:00.
+        assert state._last_fired_slot_min == 9 * 60
 
-    def test_set_disabled_clears_active_alarm(self, state, clock):
-        # Disable reminder quiet hours so the test is wall-clock-
-        # independent (default 23–08 would silence the alarm on a
-        # CI box that happens to run at 02:00).
-        state.set_reminder_quiet_hours(None, None)
+    def test_set_enabled_countdown_targets_next_slot(self, state, now_min):
+        # Default anchor 08:00 + 1h interval, now=08:30.
+        # Next slot is 09:00 ⇒ countdown ≈ 30 min.
+        now_min.set(8 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        secs = state.reminder_seconds_until_next()
+        assert secs == 30 * 60
+
+    def test_set_disabled_clears_active_alarm(self, state, now_min):
+        state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60)  # before anchor — disables retroactive firing
+        state.set_reminder_enabled(True)
+        # Cross into a scheduled slot and tick.
+        now_min.set(9 * 60)
         state.update()
         assert state.reminder_active is True
         state.set_reminder_enabled(False)
@@ -724,13 +762,17 @@ class TestReminderSetters:
         state.set_reminder_interval("garbage")
         assert state.reminder_interval == 60 * 60
 
-    def test_set_interval_resets_timer(self, state, clock):
+    def test_set_interval_rebases_slot_tracker(self, state, now_min):
+        # Enable at 09:15 (anchor 08:00, interval 1h ⇒ last fired slot
+        # = 09:00). Switching to 30min interval at 09:45 should rebase
+        # to the latest 30-min slot ≤ 09:45 ⇒ 09:30. The 10:00 slot
+        # (1h schedule) won't fire because the schedule changed.
+        now_min.set(9 * 60 + 15)
         state.set_reminder_enabled(True)
-        clock.advance(500)
-        state.set_reminder_interval(90 * 60)
-        secs = state.reminder_seconds_until_next()
-        # Right after reset, should be ≈ 90 min.
-        assert abs(secs - 90 * 60) < 1
+        assert state._last_fired_slot_min == 9 * 60
+        now_min.set(9 * 60 + 45)
+        state.set_reminder_interval(30 * 60)
+        assert state._last_fired_slot_min == 9 * 60 + 30
 
     def test_set_sound_validates(self, state):
         state.set_reminder_sound("chime")
@@ -775,88 +817,151 @@ class TestReminderTick:
         state.update()
         assert state.reminder_active is False
 
-    def test_fires_after_interval(self, state, clock):
-        # Enable + simulate the start of the day so quiet hours don't
-        # block (the helper injects now_min through is_reminder_quiet_now,
-        # but the real _tick_reminder calls it without an arg → uses
-        # time.localtime). To keep this test deterministic, disable the
-        # reminder's quiet hours.
+    def test_fires_at_scheduled_slot(self, state, now_min):
+        # Anchor 08:00, interval 1h, now=07:30 → enable. Advance to
+        # 09:00: the 09:00 slot fires (08:00 is consumed by enable's
+        # "rebase to latest past slot" rule).
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        now_min.set(9 * 60)
         state.update()
         assert state.reminder_active is True
 
-    def test_does_not_fire_before_interval(self, state, clock):
+    def test_does_not_refire_between_slots_after_ack(self, state, now_min):
+        # Enable at 07:30 ⇒ catch-up fires at 08:00 once we cross it.
+        # After ack, 08:30 (between 08:00 and 09:00) must not refire.
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval - 60)
+        now_min.set(8 * 60)
+        state.update()
+        assert state.reminder_active is True
+        state.drink_acknowledged()
+        now_min.set(8 * 60 + 30)
         state.update()
         assert state.reminder_active is False
 
-    def test_active_alarm_sets_bubble_text(self, state, clock):
+    def test_catches_up_missed_slot_when_buddy_is_late(self, state, now_min):
+        # Enable at 07:30 (anchor 08:00). User wasn't paying attention
+        # and we don't tick again until 08:30 — the 08:00 slot we
+        # missed *does* fire on the next tick, not silently get
+        # swallowed. (Behaviour matches the user's mental model of
+        # "remind me AT 08:00, 09:00, …"; if a tick is late, fire as
+        # soon as the buddy realises.)
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        now_min.set(8 * 60 + 30)
+        state.update()
+        assert state.reminder_active is True
+        assert state._last_fired_slot_min == 8 * 60
+
+    def test_active_alarm_sets_bubble_text(self, state, now_min):
+        state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
+        state.set_reminder_enabled(True)
+        now_min.set(9 * 60)
         state.update()
         assert state.bubble_text == "Drink water!"
 
     def test_active_alarm_queues_sound_when_not_off(self, clock):
+        nm = FakeNowMin(7 * 60 + 30)
         s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   now_min_fn=nm,
                                    reminder_enabled=True,
                                    reminder_sound="water",
                                    reminder_quiet_start=None,
                                    reminder_quiet_end=None)
-        clock.advance(s.reminder_interval + 1)
+        nm.set(9 * 60)
         s.update()
         assert s._pending_reminder_sound == "water"
 
     def test_active_alarm_silent_when_sound_off(self, clock):
+        nm = FakeNowMin(7 * 60 + 30)
         s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   now_min_fn=nm,
                                    reminder_enabled=True,
                                    reminder_sound="off",
                                    reminder_quiet_start=None,
                                    reminder_quiet_end=None)
-        clock.advance(s.reminder_interval + 1)
+        nm.set(9 * 60)
         s.update()
         assert s._pending_reminder_sound is None
         # Visual cue still fires — only audio is muted.
         assert s.reminder_active is True
         assert s.bubble_text == "Drink water!"
 
+    def test_fires_at_anchor_when_enabled_before_anchor(self, state, now_min):
+        # User flips the reminder on at 06:00. Default anchor 08:00.
+        # No slot fires immediately (anchor hasn't happened yet); the
+        # 08:00 slot fires when we cross it.
+        state.set_reminder_quiet_hours(None, None)
+        now_min.set(6 * 60)
+        state.set_reminder_enabled(True)
+        # Still before anchor — no fire.
+        now_min.set(7 * 60 + 59)
+        state.update()
+        assert state.reminder_active is False
+        # Cross the anchor.
+        now_min.set(8 * 60)
+        state.update()
+        assert state.reminder_active is True
+
+    def test_each_slot_fires_at_most_once(self, state, now_min):
+        # Two consecutive ticks at the same slot ⇒ alarm fires once,
+        # not twice. (After ack, the slot is consumed; the next
+        # firing is at the next slot.)
+        state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
+        state.set_reminder_enabled(True)
+        now_min.set(9 * 60)
+        state.update()
+        state.drink_acknowledged()
+        # Same slot, another tick — must not refire.
+        state.update()
+        assert state.reminder_active is False
+
 
 class TestReminderAcknowledge:
-    def test_drink_clears_active_alarm(self, state, clock):
+    def test_drink_clears_active_alarm(self, state, now_min):
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        now_min.set(9 * 60)
         state.update()
         assert state.reminder_active is True
         state.drink_acknowledged()
         assert state.reminder_active is False
 
-    def test_drink_resets_timer(self, state, clock):
+    def test_drink_does_not_shift_schedule(self, state, now_min):
+        # M4.3: drinking ack only dismisses the current alarm; the
+        # next scheduled slot still fires on time.
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
-        state.update()
+        now_min.set(9 * 60)
+        state.update()  # 09:00 fires
         state.drink_acknowledged()
+        # Countdown reads the next slot (10:00), not "interval from now".
         secs = state.reminder_seconds_until_next()
-        assert abs(secs - state.reminder_interval) < 1
+        assert secs == 60 * 60  # 09:00 → 10:00
 
-    def test_drink_clears_reminder_bubble_only(self, state, clock):
+    def test_drink_clears_reminder_bubble_only(self, state, now_min):
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        now_min.set(9 * 60)
         state.update()
         assert state.bubble_text == "Drink water!"
         state.drink_acknowledged()
         assert state.bubble_text == ""
 
-    def test_drink_leaves_user_bubble_alone(self, state, clock):
+    def test_drink_leaves_user_bubble_alone(self, state, now_min):
         state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
         state.set_reminder_enabled(True)
-        clock.advance(state.reminder_interval + 1)
+        now_min.set(9 * 60)
         state.update()
         # User sends a --message while reminder is active.
         state.set_message("deploy done")
@@ -864,6 +969,20 @@ class TestReminderAcknowledge:
         state.drink_acknowledged()
         # _dismiss_reminder must not nuke the user's bubble.
         assert state.bubble_text == "deploy done"
+
+    def test_next_slot_fires_after_drink(self, state, now_min, clock):
+        # Drink ack at 09:05; the 10:00 slot still fires when reached.
+        state.set_reminder_quiet_hours(None, None)
+        now_min.set(7 * 60 + 30)
+        state.set_reminder_enabled(True)
+        now_min.set(9 * 60)
+        state.update()
+        now_min.set(9 * 60 + 5)
+        state.drink_acknowledged()
+        # Advance to the next scheduled slot.
+        now_min.set(10 * 60)
+        state.update()
+        assert state.reminder_active is True
 
 
 class TestReminderInQuietHours:
@@ -886,17 +1005,25 @@ class TestReminderInQuietHours:
         s.update()
         assert s.reminder_active is False
 
-    def test_timer_does_not_accumulate_in_quiet(self, clock):
+    def test_slot_tracker_advances_silently_in_quiet(self, clock):
+        # Quiet hours cover all-day in this test. Walk now_min across
+        # several scheduled slots and confirm: no alarm ever fires,
+        # and `_last_fired_slot_min` advances so the moment the user
+        # exits quiet hours, only the *next* slot fires (not every
+        # slot they were meant to sleep through).
+        nm = FakeNowMin(7 * 60)
         s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   now_min_fn=nm,
                                    reminder_enabled=True,
                                    reminder_quiet_start=0,
                                    reminder_quiet_end=1439)
-        clock.advance(s.reminder_interval * 5)
-        s.update()
-        # _last_drink_ts should have slid forward to ≈ now.
-        # i.e. seconds_until_next ≈ full interval.
-        secs = s.reminder_seconds_until_next()
-        assert abs(secs - s.reminder_interval) < 2
+        # Tick through several slot-times during quiet hours.
+        for hh in (9, 10, 11, 12):
+            nm.set(hh * 60)
+            s.update()
+            assert s.reminder_active is False
+        # The 12:00 slot was the last quiet-consumed one.
+        assert s._last_fired_slot_min == 12 * 60
 
 
 class TestReminderIntervalHelper:
@@ -912,6 +1039,70 @@ class TestReminderIntervalHelper:
     def test_non_numeric_falls_back(self):
         assert buddy_state._normalize_reminder_interval("hourly") == 60 * 60
         assert buddy_state._normalize_reminder_interval(None) == 60 * 60
+
+
+class TestReminderAnchorHelpers:
+    """M4.3: the daily anchor + slot-arithmetic helpers."""
+
+    def test_normalize_anchor_passthrough(self):
+        assert buddy_state._normalize_anchor_minute(8 * 60) == 8 * 60
+        assert buddy_state._normalize_anchor_minute(0) == 0
+        assert buddy_state._normalize_anchor_minute(1439) == 1439
+
+    def test_normalize_anchor_out_of_range_defaults(self):
+        assert (buddy_state._normalize_anchor_minute(-1)
+                == buddy_state.DEFAULT_REMINDER_ANCHOR_MINUTE)
+        assert (buddy_state._normalize_anchor_minute(1440)
+                == buddy_state.DEFAULT_REMINDER_ANCHOR_MINUTE)
+
+    def test_normalize_anchor_non_numeric_defaults(self):
+        assert (buddy_state._normalize_anchor_minute("09:00")
+                == buddy_state.DEFAULT_REMINDER_ANCHOR_MINUTE)
+        assert (buddy_state._normalize_anchor_minute(None)
+                == buddy_state.DEFAULT_REMINDER_ANCHOR_MINUTE)
+
+    def test_latest_slot_before_anchor_is_none(self):
+        # now_min < anchor ⇒ no slot has fired today
+        assert buddy_state._latest_slot_at_or_before(
+            anchor_min=9 * 60, interval_min=60, now_min=7 * 60) is None
+
+    def test_latest_slot_at_anchor_is_anchor(self):
+        assert buddy_state._latest_slot_at_or_before(
+            anchor_min=9 * 60, interval_min=60, now_min=9 * 60) == 9 * 60
+
+    def test_latest_slot_between_slots(self):
+        # 09:00 + 1h grid, now=10:30 ⇒ latest slot is 10:00
+        assert buddy_state._latest_slot_at_or_before(
+            anchor_min=9 * 60, interval_min=60,
+            now_min=10 * 60 + 30) == 10 * 60
+
+    def test_latest_slot_with_irregular_interval(self):
+        # 08:00 + 90 min grid: 08:00, 09:30, 11:00, 12:30, …
+        # At 11:45 the latest slot is 11:00.
+        assert buddy_state._latest_slot_at_or_before(
+            anchor_min=8 * 60, interval_min=90,
+            now_min=11 * 60 + 45) == 11 * 60
+
+
+class TestReminderAnchorSetter:
+    def test_anchor_setter_updates_field(self, state):
+        state.set_reminder_anchor_minute(13 * 60)
+        assert state.reminder_anchor_minute == 13 * 60
+
+    def test_anchor_setter_rejects_out_of_range(self, state):
+        state.set_reminder_anchor_minute(2000)
+        # Out-of-range ⇒ falls back to default; field is now 08:00.
+        assert state.reminder_anchor_minute == 8 * 60
+
+    def test_anchor_setter_resets_slot_tracker(self, state, now_min):
+        # Enable at 09:15 ⇒ _last_fired_slot_min = 09:00. Change anchor
+        # to 13:00 ⇒ tracker resets to None so the next future slot
+        # (13:00 → 14:00 → …) fires when reached, not retroactively.
+        now_min.set(9 * 60 + 15)
+        state.set_reminder_enabled(True)
+        assert state._last_fired_slot_min == 9 * 60
+        state.set_reminder_anchor_minute(13 * 60)
+        assert state._last_fired_slot_min is None
 
 
 # ── Sound pack interaction ───────────────────────────────────────────
