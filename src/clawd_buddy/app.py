@@ -72,6 +72,7 @@ from .platform import (
     setup_window,
 )
 from .state import BuddyState
+from .ui.about import make_buddy_icon_surface
 from .ui.drawing import draw_buddy
 from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
 from .ui.tray import create_tray
@@ -205,6 +206,13 @@ def main():
     pygame.init()
     screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.NOFRAME)
     pygame.display.set_caption("Clawd Buddy")
+    # Brand the OS taskbar / Alt-Tab thumbnail with the buddy silhouette
+    # instead of the default pygame/Python feather. Best-effort — a
+    # failure here is purely cosmetic and must not block startup.
+    try:
+        pygame.display.set_icon(make_buddy_icon_surface())
+    except Exception as e:
+        print(f"[buddy] Window icon failed: {e}")
     clock = pygame.time.Clock()
 
     handle = get_window_handle()

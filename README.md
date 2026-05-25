@@ -80,7 +80,7 @@ from the **About → Reminders** tab where every preference lives:
 
 | Setting | Options |
 | --- | --- |
-| **Interval** | `30 min`, `1 h` (default), `1.5 h`, `2 h`, `4 h` |
+| **Interval** | `30 min`, `1 h` (default), `1.5 h`, `2 h`, `4 h` — picked from a scrolling dropdown directly under the **Remind me to drink water** checkbox |
 | **Sound** | `water` (default — high-pitched bell), `chime` (calmer two-bell pair), `beep` (square-wave triple-blip), or `off` for visual-only |
 | **Quiet hours** | Default **23:00–08:00**, edited via HH:MM comboboxes in 30-min increments. Pick the same time for both endpoints to disable. |
 
