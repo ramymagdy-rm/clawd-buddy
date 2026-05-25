@@ -46,12 +46,40 @@ _ABOUT_DIALOG_OPEN = False
 _HHMM_OPTIONS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
 
 
+def _interval_label_for(seconds):
+    """Return the human label for a known interval, or the 1-hour label
+    when the value isn't in the preset set. The combobox loader uses
+    this so a hand-edited config that drifted out of range still shows
+    *something* selected rather than rendering blank."""
+    return REMINDER_INTERVAL_LABELS.get(
+        seconds, REMINDER_INTERVAL_LABELS[REMINDER_INTERVALS[1]]
+    )
+
+
+def _interval_from_label(label):
+    """Inverse of `_interval_label_for`. Returns the seconds value for
+    a known label, or `None` when the string doesn't match any preset
+    (the caller falls back to the current value in that case)."""
+    for sec, lbl in REMINDER_INTERVAL_LABELS.items():
+        if lbl == label:
+            return sec
+    return None
+
+
+# Combobox values for the interval picker, in build order so the user
+# scrolls from shortest to longest.
+_INTERVAL_LABEL_OPTIONS = [
+    REMINDER_INTERVAL_LABELS[s] for s in REMINDER_INTERVALS
+]
+
+
 def _make_buddy_icon_image():
     """Procedurally draw a 64x64 RGBA PIL Image of the buddy's face.
 
-    Used as both the system-tray icon and the About-dialog window icon
-    so the buddy silhouette is the branding everywhere the app shows
-    itself.
+    Used as the system-tray icon and the About-dialog window icon so
+    the buddy silhouette is the branding everywhere PIL is the right
+    surface type. The pygame main window uses `make_buddy_icon_surface`
+    below — same shape, different pixel container.
     """
     from PIL import Image, ImageDraw
 
@@ -65,6 +93,30 @@ def _make_buddy_icon_image():
     d.line([(24, 46), (22, 54)], fill=(35, 35, 48), width=3)
     d.line([(40, 46), (42, 54)], fill=(35, 35, 48), width=3)
     return img
+
+
+def make_buddy_icon_surface():
+    """Return a 64×64 `pygame.Surface` of the buddy silhouette for
+    `pygame.display.set_icon`, so the taskbar / Alt-Tab thumbnail shows
+    the buddy face instead of the default pygame/Python feather.
+
+    Built by converting the existing PIL icon through `pygame.image.
+    frombytes` — keeps the silhouette identical to the tray + About
+    icon without duplicating the procedural draw. Both `pygame` and
+    `PIL` are required dependencies, so the import is unconditional;
+    the caller is expected to have run `pygame.init()` already
+    (`set_icon` insists on it on most platforms).
+    """
+    import pygame
+
+    img = _make_buddy_icon_image()
+    # `frombytes` is the post-2.3.0 spelling of the older `fromstring`.
+    # `getattr` keeps the code working on older pygame builds in the
+    # supported Python range, but prefers the new name when available
+    # so the deprecation warning doesn't fire on modern installs.
+    builder = getattr(pygame.image, "frombytes", None) \
+        or pygame.image.fromstring
+    return builder(img.tobytes(), img.size, img.mode)
 
 
 def show_about_dialog(state=None):
@@ -240,28 +292,35 @@ def _build_reminders_tab(notebook, state, root):
         command=on_enabled_change,
     ).pack(anchor="w", pady=(0, 10))
 
-    # ── Interval radios ────────────────────────────────────────
+    # ── Interval combobox ──────────────────────────────────────
+    # Same scrolling-dropdown affordance as the quiet-hours selectors
+    # below — keeps the Reminders tab visually uniform now that every
+    # configurable value uses the same widget shape.
     tk.Label(frame, text="How often:",
              font=("Segoe UI", 9, "bold")).pack(anchor="w")
-    interval_var = tk.IntVar(value=int(state.reminder_interval))
-    interval_frame = tk.Frame(frame)
-    interval_frame.pack(anchor="w", pady=(2, 10))
+    interval_var = tk.StringVar(
+        value=_interval_label_for(int(state.reminder_interval)))
+    interval_combo = ttk.Combobox(
+        frame,
+        values=_INTERVAL_LABEL_OPTIONS,
+        textvariable=interval_var,
+        state="readonly",
+        width=16,
+    )
+    interval_combo.pack(anchor="w", pady=(2, 10))
 
-    def on_interval_change():
-        state.set_reminder_interval(interval_var.get())
-        save_reminder_interval_pref(interval_var.get())
+    def on_interval_change(_event=None):
+        sec = _interval_from_label(interval_var.get())
+        if sec is None:
+            # Combobox can't normally emit an unknown label (readonly),
+            # but guard anyway — silently snap the visible value back to
+            # the current state rather than persisting garbage.
+            interval_var.set(_interval_label_for(state.reminder_interval))
+            return
+        state.set_reminder_interval(sec)
+        save_reminder_interval_pref(sec)
 
-    interval_radios = []
-    for sec in REMINDER_INTERVALS:
-        rb = ttk.Radiobutton(
-            interval_frame,
-            text=REMINDER_INTERVAL_LABELS[sec],
-            value=sec,
-            variable=interval_var,
-            command=on_interval_change,
-        )
-        rb.pack(anchor="w")
-        interval_radios.append(rb)
+    interval_combo.bind("<<ComboboxSelected>>", on_interval_change)
 
     # ── Sound combobox ─────────────────────────────────────────
     tk.Label(frame, text="Reminder sound:",
@@ -340,14 +399,11 @@ def _build_reminders_tab(notebook, state, root):
     # ── Refresh + tick loop ────────────────────────────────────
     def _refresh_widget_states():
         st = "normal" if enabled_var.get() else "disabled"
-        for rb in interval_radios:
-            rb.configure(state=st)
-        sound_combo.configure(state=("readonly" if enabled_var.get()
-                                     else "disabled"))
-        quiet_start.configure(state=("readonly" if enabled_var.get()
-                                     else "disabled"))
-        quiet_end.configure(state=("readonly" if enabled_var.get()
-                                   else "disabled"))
+        combo_st = "readonly" if enabled_var.get() else "disabled"
+        interval_combo.configure(state=combo_st)
+        sound_combo.configure(state=combo_st)
+        quiet_start.configure(state=combo_st)
+        quiet_end.configure(state=combo_st)
         drank_btn.configure(state=st)
 
     def _tick_status():

@@ -13,6 +13,10 @@ import sys
 
 import pytest
 
+from clawd_buddy.config import (
+    REMINDER_INTERVALS,
+    REMINDER_INTERVAL_LABELS,
+)
 from clawd_buddy.ui import about, tray
 
 
@@ -85,13 +89,88 @@ class TestTrayLogPath:
         assert result.endswith("clawd-buddy-tray.log")
 
 
+# ── Reminder interval combobox helpers ───────────────────────────────
+class TestIntervalLabelHelpers:
+    """The Reminders tab presents the interval as a Combobox now (same
+    affordance as quiet hours). Two tiny pure helpers convert between
+    the preset seconds value and the human label — round-trippable, with
+    a documented fallback for off-preset input."""
+
+    def test_label_for_every_preset_round_trips(self):
+        # Every preset second value round-trips through the label
+        # helpers. If this breaks, the combobox cannot reflect the
+        # user's persisted selection on next launch.
+        for sec in REMINDER_INTERVALS:
+            label = about._interval_label_for(sec)
+            assert about._interval_from_label(label) == sec
+
+    def test_label_for_unknown_seconds_falls_back_to_one_hour(self):
+        # A hand-edited config that drifted out of range still shows
+        # *something* selected rather than rendering blank.
+        assert (about._interval_label_for(12345)
+                == REMINDER_INTERVAL_LABELS[60 * 60])
+
+    def test_from_label_unknown_returns_none(self):
+        # Garbage label ⇒ None, so the combobox handler snaps back to
+        # the previous valid value rather than persisting it.
+        assert about._interval_from_label("Every never") is None
+        assert about._interval_from_label("") is None
+
+    def test_interval_options_cover_every_preset_in_order(self):
+        # The scroll list must match `REMINDER_INTERVALS` in build order
+        # so the user scrolls from shortest to longest.
+        assert about._INTERVAL_LABEL_OPTIONS == [
+            REMINDER_INTERVAL_LABELS[s] for s in REMINDER_INTERVALS
+        ]
+
+
+# ── Pygame window icon surface ───────────────────────────────────────
+class TestBuddyIconSurface:
+    """`make_buddy_icon_surface` brands the pygame main-window taskbar
+    icon with the buddy silhouette instead of the default Python
+    feather. The surface is built from the same PIL icon — the test
+    confirms shape parity and that it's not a blank surface."""
+
+    def test_surface_is_64x64(self):
+        try:
+            import pygame
+        except ImportError:
+            pytest.skip("pygame not installed")
+        pygame.init()
+        try:
+            surf = about.make_buddy_icon_surface()
+            assert surf.get_size() == (64, 64)
+        finally:
+            pygame.quit()
+
+    def test_surface_has_a_visible_body_pixel(self):
+        try:
+            import pygame
+        except ImportError:
+            pytest.skip("pygame not installed")
+        pygame.init()
+        try:
+            surf = about.make_buddy_icon_surface()
+            # The body is the rounded rect roughly centred at (32, 30);
+            # if the procedural draw ever silently produced an empty
+            # surface, every pixel would be fully transparent.
+            r, g, b, a = surf.get_at((32, 30))
+            assert a > 0, "expected non-transparent body pixel"
+        finally:
+            pygame.quit()
+
+
 # ── Module surface stability ─────────────────────────────────────────
 class TestExportSurface:
     @pytest.mark.parametrize("name", [
         "_make_buddy_icon_image",
+        "make_buddy_icon_surface",
         "show_about_dialog",
         "_run_about_dialog",
         "_REPO_URL",
+        "_interval_label_for",
+        "_interval_from_label",
+        "_INTERVAL_LABEL_OPTIONS",
     ])
     def test_about_module_exports(self, name):
         assert hasattr(about, name)

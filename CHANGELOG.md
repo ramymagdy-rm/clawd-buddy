@@ -4,6 +4,41 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.17] - 2026-05-25
+
+### Changed — Milestone 4 polish
+
+- **Interval picker is now a scrolling dropdown**, matching the
+  quiet-hours selectors. The previous radio group occupied five rows
+  for a single setting; replacing it with a `ttk.Combobox` (positioned
+  directly under the **Remind me to drink water** checkbox) makes the
+  Reminders tab visually uniform — every configurable value now uses
+  the same widget shape. Behaviour is unchanged: same five presets
+  (`30 min` … `4 h`), same save-on-change semantics, same fallback to
+  1 h when a config drifts off-preset.
+
+### Added
+
+- **Main-window taskbar icon is the buddy silhouette**, not the
+  default pygame/Python feather. Same procedural icon already used by
+  the system tray and the About dialog — surfaced through a new
+  `make_buddy_icon_surface()` helper in `clawd_buddy.ui.about` that
+  converts the existing PIL icon into a `pygame.Surface` via
+  `pygame.image.frombytes`. Failures are non-fatal (cosmetic-only):
+  startup logs a single line and continues.
+
+### Documentation
+
+- `.ai/decisions/2026-05-25-milestone-4-ui-polish.md` — small design
+  note covering why the interval moved to a Combobox (visual uniformity
+  with quiet hours, single source of truth via label helpers) and why
+  the pygame window icon is built by re-routing the existing PIL icon
+  through `frombytes` rather than redrawing in pygame primitives.
+- `.ai/feature-map.md` — two new rows for the interval combobox and
+  the pygame window icon.
+- `.ai/roadmap.md` — new **Milestone 4.2 — UI polish** entry marked
+  shipped.
+
 ## [0.1.16] - 2026-05-25
 
 ### Added — Milestone 4: Wellness nudges
