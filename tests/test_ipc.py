@@ -147,7 +147,7 @@ class TestDispatch:
         assert ipc.KNOWN_ACTIONS == {
             "celebrate", "wave", "raise", "quit",
             "prompt_start", "greet", "thinking_start", "thinking_end",
-            "message", "status",
+            "message", "status", "drank",
         }
 
     def test_message_sets_bubble_text(self, state):
@@ -280,6 +280,84 @@ class TestFormatHHMM:
         assert ipc._format_hhmm("23:00") is None
         assert ipc._format_hhmm(60.0) is None
         assert ipc._format_hhmm(None) is None
+
+
+# ── Drank action + reminder status block (M4) ────────────────────────
+class TestDrankAction:
+    def test_drank_acknowledges_reminder(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        assert state.reminder_active is True
+        ipc.dispatch_action(state, "drank")
+        assert state.reminder_active is False
+
+    def test_drank_resets_timer_even_without_active_alarm(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(120)  # 2 minutes in
+        ipc.dispatch_action(state, "drank")
+        # Timer reset — seconds-until-next ≈ full interval.
+        secs = state.reminder_seconds_until_next()
+        assert abs(secs - state.reminder_interval) < 1
+
+    def test_drank_records_last_action(self, state):
+        ipc.dispatch_action(state, "drank")
+        assert state.last_action == "drank"
+
+    def test_drank_returns_true(self, state):
+        assert ipc.dispatch_action(state, "drank") is True
+
+
+class TestStatusReminderBlock:
+    def test_reminder_block_shape(self, state):
+        resp = ipc.build_status_response(state)
+        assert "reminder" in resp
+        block = resp["reminder"]
+        for key in ("enabled", "interval_seconds", "sound",
+                    "quiet_hours", "active", "seconds_until_next"):
+            assert key in block
+
+    def test_reminder_block_disabled_defaults(self, state):
+        resp = ipc.build_status_response(state)
+        block = resp["reminder"]
+        assert block["enabled"] is False
+        assert block["interval_seconds"] == 60 * 60
+        assert block["sound"] == "water"
+        # Default quiet hours are 23:00–08:00.
+        assert block["quiet_hours"] == {"start": "23:00", "end": "08:00"}
+        assert block["active"] is False
+        assert block["seconds_until_next"] is None  # disabled ⇒ None
+
+    def test_reminder_quiet_hours_null_when_disabled(self, state):
+        state.set_reminder_quiet_hours(None, None)
+        block = ipc.build_status_response(state)["reminder"]
+        assert block["quiet_hours"] is None
+
+    def test_reminder_block_when_enabled(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        block = ipc.build_status_response(state)["reminder"]
+        assert block["enabled"] is True
+        # Just-enabled: seconds-until-next ≈ full interval, definitely
+        # not None.
+        assert isinstance(block["seconds_until_next"], int)
+        assert block["seconds_until_next"] > 0
+
+    def test_reminder_block_when_active(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        block = ipc.build_status_response(state)["reminder"]
+        assert block["active"] is True
+        assert block["seconds_until_next"] == 0
+
+    def test_status_response_with_reminder_is_json_serialisable(self, state):
+        state.set_reminder_enabled(True)
+        resp = ipc.build_status_response(state)
+        json.dumps(resp)
 
 
 # ── send_signal client ───────────────────────────────────────────────

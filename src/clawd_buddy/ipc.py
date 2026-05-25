@@ -56,6 +56,7 @@ ACTION_THINKING_START = "thinking_start"
 ACTION_THINKING_END = "thinking_end"
 ACTION_MESSAGE = "message"
 ACTION_STATUS = "status"
+ACTION_DRANK = "drank"   # M4: water-reminder acknowledgment
 
 KNOWN_ACTIONS = frozenset({
     ACTION_CELEBRATE,
@@ -68,6 +69,7 @@ KNOWN_ACTIONS = frozenset({
     ACTION_THINKING_END,
     ACTION_MESSAGE,
     ACTION_STATUS,
+    ACTION_DRANK,
 })
 
 
@@ -132,6 +134,8 @@ def dispatch_action(state, action, payload=None):
         # the state side — but we still record the action below so
         # `--status` reports "status" as its own last_action.
         pass
+    elif action == ACTION_DRANK:
+        state.drink_acknowledged()
     else:
         # Defensive default: any unrecognised action celebrates. This
         # preserves backward-compat with older buddy clients that sent
@@ -174,6 +178,29 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
             "start": _format_hhmm(state.quiet_start),
             "end": _format_hhmm(state.quiet_end),
         }
+    # M4: reminder block. Mirrors M3's quiet-hours shape (null when
+    # the inner window is disabled; HH:MM strings when set).
+    # `seconds_until_next` is rounded to whole seconds — sub-second
+    # precision is meaningless for a feature whose minimum interval
+    # is 30 minutes.
+    if (state.reminder_quiet_start is None
+            or state.reminder_quiet_end is None):
+        reminder_quiet = None
+    else:
+        reminder_quiet = {
+            "start": _format_hhmm(state.reminder_quiet_start),
+            "end": _format_hhmm(state.reminder_quiet_end),
+        }
+    secs_until = state.reminder_seconds_until_next()
+    reminder_block = {
+        "enabled": bool(state.reminder_enabled),
+        "interval_seconds": int(state.reminder_interval),
+        "sound": state.reminder_sound,
+        "quiet_hours": reminder_quiet,
+        "active": bool(state.reminder_active),
+        "seconds_until_next": (None if secs_until is None
+                               else int(round(secs_until))),
+    }
     return {
         "version": __version__,
         "pid": os.getpid(),
@@ -191,6 +218,7 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "reduce_motion": bool(state.reduce_motion),
         "volume": round(float(state.volume), 3),
         "quiet_hours": quiet_block,
+        "reminder": reminder_block,
     }
 
 

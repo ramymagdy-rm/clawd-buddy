@@ -13,7 +13,13 @@ import random
 import time
 
 from .constants import WIN_H, WIN_W
-from .ui.sound import DEFAULT_SOUND_PACK, SOUND_PACK_CHOICES, SOUND_PACK_OFF
+from .ui.sound import (
+    DEFAULT_SOUND_PACK,
+    REMINDER_SOUND_CHOICES,
+    REMINDER_SOUND_OFF,
+    SOUND_PACK_CHOICES,
+    SOUND_PACK_OFF,
+)
 from .ui.themes import THEMES
 
 
@@ -65,6 +71,36 @@ DEFAULT_BUBBLE_DUR = 3.0
 MAX_BUBBLE_LEN = 120
 
 
+# M4: water-reminder interval presets (seconds). The roadmap commits to
+# exactly these five — 30 min, 1 h, 1.5 h, 2 h, 4 h. They live as a tuple
+# so the About-window radio group and the on-disk validator agree on the
+# set without duplicating the magic numbers.
+REMINDER_INTERVAL_30M = 30 * 60
+REMINDER_INTERVAL_1H = 60 * 60
+REMINDER_INTERVAL_90M = 90 * 60
+REMINDER_INTERVAL_2H = 120 * 60
+REMINDER_INTERVAL_4H = 240 * 60
+REMINDER_INTERVALS = (
+    REMINDER_INTERVAL_30M,
+    REMINDER_INTERVAL_1H,
+    REMINDER_INTERVAL_90M,
+    REMINDER_INTERVAL_2H,
+    REMINDER_INTERVAL_4H,
+)
+DEFAULT_REMINDER_INTERVAL = REMINDER_INTERVAL_1H
+
+# Default reminder quiet-hours window: 23:00 → 08:00 local. Specified
+# in the user's M4 brief; codified here so a brand-new buddy with the
+# reminder toggled on respects the user's evenings without any config
+# step.
+DEFAULT_REMINDER_QUIET_START = 23 * 60
+DEFAULT_REMINDER_QUIET_END = 8 * 60
+
+# Default text shown in the speech bubble while the reminder is firing.
+# Short, ASCII-only (pygame's default font doesn't carry emoji).
+REMINDER_BUBBLE_TEXT = "Drink water!"
+
+
 # Confetti palette — shared across all themes so a celebrate animation
 # is always rainbow-coloured regardless of which theme is active.
 CONFETTI_COLORS = [
@@ -106,6 +142,22 @@ def _normalize_quiet(start, end):
     return start, end
 
 
+def _normalize_reminder_interval(seconds):
+    """Coerce a reminder interval to one of the documented presets.
+
+    Anything that isn't a known interval falls back to the 1-hour
+    default — a corrupt config or a typo in an external tool must not
+    silently set an unexpected interval (5-second reminder spam being
+    the obvious foot-gun)."""
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return DEFAULT_REMINDER_INTERVAL
+    if seconds in REMINDER_INTERVALS:
+        return seconds
+    return DEFAULT_REMINDER_INTERVAL
+
+
 def _in_quiet_window(start, end, now_min):
     """Return True if `now_min` (minutes-from-midnight) falls inside
     the [start, end) window. Handles wraparound: when start > end
@@ -138,7 +190,12 @@ class BuddyState:
 
     def __init__(self, theme_name="dark", sound_pack=None, clock=None,
                  reduce_motion=False, volume=1.0,
-                 quiet_start=None, quiet_end=None):
+                 quiet_start=None, quiet_end=None,
+                 reminder_enabled=False,
+                 reminder_interval=DEFAULT_REMINDER_INTERVAL,
+                 reminder_sound=None,
+                 reminder_quiet_start=DEFAULT_REMINDER_QUIET_START,
+                 reminder_quiet_end=DEFAULT_REMINDER_QUIET_END):
         # `clock` indirection so unit tests can advance time without
         # actually sleeping. Defaults to time.time at runtime.
         self._clock = clock if clock is not None else time.time
@@ -216,6 +273,37 @@ class BuddyState:
         # re-apply on the next frame. Same pattern as `_scale_changed`.
         self._volume_changed = False
 
+        # M4: water-reminder state. Keeps a fully independent quiet-
+        # hours window from M3's notification quiet-hours so users can
+        # mute reminders at night while still hearing celebrate sounds
+        # (and vice versa). `reminder_active` is True from the moment
+        # an alarm fires until the user acknowledges via Space, the
+        # tray "I drank water" entry, the IPC `drank` action, or
+        # disables the reminder altogether. `_pending_reminder_sound`
+        # is the same producer/consumer flag pattern as
+        # `_pending_sound` — set on the state-machine thread, drained
+        # by the main loop so mixer access stays single-threaded.
+        self.reminder_enabled = bool(reminder_enabled)
+        self.reminder_interval = _normalize_reminder_interval(
+            reminder_interval)
+        if reminder_sound is None or reminder_sound not in REMINDER_SOUND_CHOICES:
+            reminder_sound = "water"
+        self.reminder_sound = reminder_sound
+        (self.reminder_quiet_start,
+         self.reminder_quiet_end) = _normalize_quiet(
+            reminder_quiet_start, reminder_quiet_end)
+        # Start the clock from "now" so the buddy doesn't fire immediately
+        # when the user toggles the reminder on.
+        self._last_drink_ts = self._clock()
+        self.reminder_active = False
+        self._pending_reminder_sound = None
+        # Tracks the previous tick's quiet-hours state so we can detect
+        # the transition out of quiet hours and reset the timer at that
+        # moment (otherwise a 1h reminder set at 22:00 with quiet hours
+        # 23–08 would fire at 08:00 sharp every morning, which is the
+        # exact noise the quiet window was supposed to avoid).
+        self._reminder_was_quiet = False
+
     # ── Sound ────────────────────────────────────────────────────
     @property
     def sound_enabled(self):
@@ -271,6 +359,145 @@ class BuddyState:
             lt = time.localtime()
             now_min = lt.tm_hour * 60 + lt.tm_min
         return _in_quiet_window(self.quiet_start, self.quiet_end, now_min)
+
+    # ── M4: water-reminder surface ───────────────────────────────
+    def set_reminder_enabled(self, enabled):
+        """Toggle the water-drinking reminder.
+
+        Enabling restarts the timer from "now" so a fresh enable
+        doesn't fire immediately. Disabling clears any active alarm —
+        we don't want to leave a stuck reminder visible after the user
+        explicitly turned the feature off."""
+        enabled = bool(enabled)
+        self.reminder_enabled = enabled
+        if enabled:
+            self._last_drink_ts = self._clock()
+            self._reminder_was_quiet = self.is_reminder_quiet_now()
+        else:
+            self._dismiss_reminder()
+
+    def set_reminder_interval(self, seconds):
+        """Pick one of `REMINDER_INTERVALS`. Resets the timer so the
+        new interval is honoured immediately — a user dialling down
+        from 4h to 30m shouldn't have to wait the remainder of a 4h
+        window before the change takes effect."""
+        new_interval = _normalize_reminder_interval(seconds)
+        if new_interval == self.reminder_interval:
+            return
+        self.reminder_interval = new_interval
+        self._last_drink_ts = self._clock()
+
+    def set_reminder_sound(self, name):
+        """Pick the reminder sound. Falls back silently for unknown
+        values rather than raising; the About-window combobox is the
+        production input but tests and configs hand us strings too."""
+        if name in REMINDER_SOUND_CHOICES:
+            self.reminder_sound = name
+
+    def set_reminder_quiet_hours(self, start, end):
+        """Set the reminder's quiet-hours window (minutes-from-midnight,
+        or None/None to disable). Independent of M3's notification
+        quiet-hours — see the M4 design note for why."""
+        (self.reminder_quiet_start,
+         self.reminder_quiet_end) = _normalize_quiet(start, end)
+        # Re-check the quiet flag so the next tick reads the new window.
+        self._reminder_was_quiet = self.is_reminder_quiet_now()
+
+    def is_reminder_quiet_now(self, now_min=None):
+        """True iff the reminder's quiet-hours window is configured AND
+        the current local time falls inside it. Mirrors `is_quiet_now`
+        but reads a different field pair (see design note)."""
+        if (self.reminder_quiet_start is None
+                or self.reminder_quiet_end is None):
+            return False
+        if now_min is None:
+            lt = time.localtime()
+            now_min = lt.tm_hour * 60 + lt.tm_min
+        return _in_quiet_window(
+            self.reminder_quiet_start, self.reminder_quiet_end, now_min)
+
+    def reminder_seconds_until_next(self):
+        """How long until the next reminder fires. Negative when overdue;
+        `None` when the reminder is disabled. Used by the About-window's
+        live status label and surfaced in `--status`."""
+        if not self.reminder_enabled:
+            return None
+        if self.reminder_active:
+            return 0
+        elapsed = self._clock() - self._last_drink_ts
+        return self.reminder_interval - elapsed
+
+    def drink_acknowledged(self):
+        """User confirmed they drank — dismiss any active alarm and
+        reset the interval clock. Routed through here from Space,
+        the tray "I drank water" entry, and the IPC `drank` action so
+        external integrations (smart bottle, etc.) ack identically."""
+        self._dismiss_reminder()
+        self._last_drink_ts = self._clock()
+
+    def _dismiss_reminder(self):
+        """Clear the active alarm without changing the timer.
+
+        Used both on explicit ack (via `drink_acknowledged`, which then
+        resets the clock) and when disabling the reminder altogether
+        (where we want the alarm gone but the timer state is moot)."""
+        self.reminder_active = False
+        self._pending_reminder_sound = None
+        # Suppress the reminder bubble specifically — leave any other
+        # bubble (e.g. a `--message` ping) alone.
+        if self.bubble_text == REMINDER_BUBBLE_TEXT:
+            self.bubble_text = ""
+            self._bubble_expiry = 0.0
+
+    def _tick_reminder(self, now):
+        """Per-frame reminder check. Called from `update()`.
+
+        Quiet-hours interaction:
+          - In quiet hours: do not fire. Continually slide `_last_drink_ts`
+            forward so the timer doesn't accumulate during the night;
+            the moment we exit quiet hours, the user gets a full
+            interval before the first alarm.
+          - Outside quiet hours: fire when the elapsed time crosses the
+            interval and the alarm isn't already active.
+
+        Already-active alarms stay active across quiet-hours
+        boundaries — silencing a firing alarm because the clock crossed
+        23:00 would be more surprising than letting it sit until ack.
+        """
+        if not self.reminder_enabled:
+            return
+        quiet = self.is_reminder_quiet_now()
+        if quiet:
+            if not self.reminder_active:
+                # During quiet hours the timer doesn't accumulate.
+                self._last_drink_ts = now
+            self._reminder_was_quiet = True
+            return
+        if self._reminder_was_quiet:
+            # Transition out of quiet hours — start the interval fresh.
+            self._last_drink_ts = now
+            self._reminder_was_quiet = False
+            return
+        if self.reminder_active:
+            # Restore the reminder bubble if a `set_message` cleared
+            # it (e.g. a `--message "deploy done"` that just expired).
+            # We don't overwrite a *currently visible* user bubble —
+            # the message wins briefly, the reminder returns when
+            # their bubble expires.
+            if not self.bubble_text:
+                self.bubble_text = REMINDER_BUBBLE_TEXT
+                self._bubble_expiry = now + 365 * 24 * 3600
+            return
+        if now - self._last_drink_ts >= self.reminder_interval:
+            self.reminder_active = True
+            if self.reminder_sound != REMINDER_SOUND_OFF:
+                self._pending_reminder_sound = self.reminder_sound
+            # Show the reminder bubble. Far-future expiry rather than
+            # re-piping every frame; `_dismiss_reminder` clears it,
+            # the active-branch above restores it if a user message
+            # ate it.
+            self.bubble_text = REMINDER_BUBBLE_TEXT
+            self._bubble_expiry = now + 365 * 24 * 3600
 
     # ── Mode introspection (used by drawing and tests) ───────────
     @property
@@ -415,6 +642,11 @@ class BuddyState:
         if self.bubble_text and now > self._bubble_expiry:
             self.bubble_text = ""
             self._bubble_expiry = 0.0
+
+        # M4: tick the water-reminder. Cheap when disabled (single
+        # bool check + return); the work only happens for users who
+        # opted in via the About-window Reminders tab.
+        self._tick_reminder(now)
 
     # ── Internal: dispatch / queue ───────────────────────────────
     def _request(self, action, **kwargs):

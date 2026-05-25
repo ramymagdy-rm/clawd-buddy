@@ -23,6 +23,7 @@ from ..config import (
     VOLUME_STEPS,
     save_quiet_hours_pref,
     save_reduce_motion_pref,
+    save_reminder_enabled_pref,
     save_sound_pack_pref,
     save_theme_pref,
     save_volume_pref,
@@ -89,7 +90,11 @@ def _create_tray_impl(state):
         state.bring_to_front()
 
     def on_about(_icon, _item):
-        show_about_dialog()
+        # M4: pass state so the About dialog's Reminders tab can read
+        # and mutate it. Older callers (tests) can still call
+        # show_about_dialog() without args — that path falls back to
+        # an info-only Reminders tab.
+        show_about_dialog(state)
 
     def on_quit(icon, _item):
         state.should_quit = True
@@ -214,7 +219,36 @@ def _create_tray_impl(state):
     def _reduce_motion_checker(_item):
         return state.reduce_motion
 
+    # M4: Water Reminder — top-level toggle for quick on/off. The
+    # detailed config (interval, sound, quiet hours) lives in the
+    # About-window Reminders tab; this is just the fast path so a
+    # user heading into a meeting can mute reminders in one click.
+    def on_reminder_toggle(_icon, item):
+        new_val = not bool(item.checked)
+        state.set_reminder_enabled(new_val)
+        save_reminder_enabled_pref(new_val)
+
+    def _reminder_enabled_checker(_item):
+        return state.reminder_enabled
+
+    # M4: "I drank water" — top-level acknowledgment shortcut. Hidden
+    # via `visible=` when there's no active alarm, since clicking it
+    # outside of an alarm is harmless (just resets the timer) but
+    # adding noise to the always-visible menu hurts more than it
+    # helps. pystray's `visible` accepts a callable that returns a
+    # bool per render.
+    def on_drank(_icon, _item):
+        state.drink_acknowledged()
+
+    def _drank_visible(_item):
+        return state.reminder_active
+
     menu = pystray.Menu(
+        pystray.MenuItem(
+            "I drank water",
+            on_drank,
+            visible=_drank_visible,
+        ),
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),
         pystray.MenuItem("Theme", theme_submenu),
@@ -224,9 +258,14 @@ def _create_tray_impl(state):
             on_reduce_motion,
             checked=_reduce_motion_checker,
         ),
+        pystray.MenuItem(
+            "Water Reminder",
+            on_reminder_toggle,
+            checked=_reminder_enabled_checker,
+        ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Clawd Buddy v{APP_VERSION}", None, enabled=False),
-        pystray.MenuItem("About", on_about),
+        pystray.MenuItem("About…", on_about),
         pystray.MenuItem("Quit", on_quit),
     )
     pystray.Icon("clawd-buddy", img, "Clawd Buddy", menu).run()

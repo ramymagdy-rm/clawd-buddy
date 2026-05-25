@@ -72,6 +72,35 @@ and `quiet_hours` (`{start, end}` minutes-from-midnight) — the same
 file as the theme and sound pack. Defaults: motion on, volume 100%,
 quiet hours off.
 
+### Water reminder
+
+The buddy can nudge you to drink water on a schedule. Off by default
+— turn it on from the system tray (**Water Reminder** toggle) or
+from the **About → Reminders** tab where every preference lives:
+
+| Setting | Options |
+| --- | --- |
+| **Interval** | `30 min`, `1 h` (default), `1.5 h`, `2 h`, `4 h` |
+| **Sound** | `water` (default — high-pitched bell), `chime` (calmer two-bell pair), `beep` (square-wave triple-blip), or `off` for visual-only |
+| **Quiet hours** | Default **23:00–08:00**, edited via HH:MM comboboxes in 30-min increments. Pick the same time for both endpoints to disable. |
+
+When the reminder fires:
+
+- The chosen sound plays once (no looping nag).
+- The buddy shows a **"Drink water!"** speech bubble until you ack.
+- **Press Space** to acknowledge — the bubble clears and the timer
+  resets. Space keeps its old "test celebration" meaning at every
+  other moment, so you haven't lost the shortcut.
+- Or click **I drank water** in the tray menu (visible only while an
+  alarm is active).
+- Or signal externally: `clawd-buddy --drank` works the same way for
+  smart-bottle integrations, wrist macros, or scripts.
+
+Inside quiet hours the timer doesn't tick — you wake up to a full
+interval, not a 7am water-spam. Reminder prefs persist under a
+`reminder` block in `config.json` (`enabled`, `interval`, `sound`,
+`quiet_hours`).
+
 ### Themes
 
 Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
@@ -244,8 +273,13 @@ clawd-buddy --message TEXT   Show a 3s speech bubble with TEXT above the
                              current bubble immediately.
 clawd-buddy --status         Print the running buddy's state as JSON
                              (version, pid, port, mode, queue depth,
-                             theme, sound pack, bubble, last action)
-                             and exit. Exit 1 if no buddy is listening.
+                             theme, sound pack, bubble, last action,
+                             plus M3 comfort prefs and the M4 reminder
+                             block) and exit. Exit 1 if no buddy is
+                             listening.
+clawd-buddy --drank          Acknowledge the water-drinking reminder
+                             (clears any active alarm + resets the
+                             timer). Exit 1 if no buddy is listening.
 clawd-buddy --prompt-start   Signal start of a Claude Code prompt — greets
                              on the first prompt of a new session, then
                              enters the thinking animation. Reads
@@ -350,7 +384,7 @@ buddy writes a JSON snapshot back on the same socket before closing:
 ```bash
 $ clawd-buddy --status
 {
-  "version": "0.1.15",
+  "version": "0.1.16",
   "pid": 12345,
   "port": 44556,
   "mode": "idle",
@@ -364,12 +398,23 @@ $ clawd-buddy --status
   "bubble_text": "",
   "reduce_motion": false,
   "volume": 1.0,
-  "quiet_hours": {"start": "23:00", "end": "08:00"}
+  "quiet_hours": {"start": "23:00", "end": "08:00"},
+  "reminder": {
+    "enabled": true,
+    "interval_seconds": 3600,
+    "sound": "water",
+    "quiet_hours": {"start": "23:00", "end": "08:00"},
+    "active": false,
+    "seconds_until_next": 1742
+  }
 }
 ```
 
-`reduce_motion`, `volume`, and `quiet_hours` were added in v0.1.15.
-`quiet_hours` is `null` when the window is disabled.
+`reduce_motion`, `volume`, and `quiet_hours` were added in v0.1.15;
+the `reminder` block was added in v0.1.16. Both `quiet_hours` keys
+are `null` when their respective window is disabled;
+`reminder.seconds_until_next` is `null` when the reminder is off and
+`0` when an alarm is firing.
 
 This is the recommended "is the buddy alive?" probe — exit code 1 plus
 a stderr message when no buddy is listening, exit code 0 with JSON on
@@ -404,8 +449,10 @@ The buddy adds a system tray icon with a right-click menu:
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
   - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.
 - **Reduce Motion** — accessibility toggle. When checked, the buddy stops bobbing, swinging limbs, and spawning confetti; the colored attention border and sounds remain.
+- **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, quiet hours) lives in **About… → Reminders**.
+- **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss + reset timer.
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
-- **About** — open a small dialog with version, description, author, license, and a clickable repo link
+- **About…** — open a tabbed dialog: **About** (version / repo / author) and **Reminders** (edit interval, sound, and quiet hours; live countdown; "Drank now" button).
 - **Quit** — close the buddy
 
 ### Autostart

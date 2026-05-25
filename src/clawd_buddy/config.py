@@ -18,7 +18,13 @@ import json
 import os
 import sys
 
-from .ui.sound import DEFAULT_SOUND_PACK, SOUND_PACK_CHOICES, SOUND_PACK_OFF
+from .ui.sound import (
+    DEFAULT_REMINDER_SOUND,
+    DEFAULT_SOUND_PACK,
+    REMINDER_SOUND_CHOICES,
+    SOUND_PACK_CHOICES,
+    SOUND_PACK_OFF,
+)
 from .ui.themes import is_known_theme
 
 
@@ -242,4 +248,177 @@ def save_quiet_hours_pref(start, end):
     if cfg.get("quiet_hours") == new:
         return
     cfg["quiet_hours"] = new
+    save_config(cfg)
+
+
+# ── Water reminder preferences (M4) ──────────────────────────────────
+# All reminder prefs live under a `reminder` sub-dict in `config.json`
+# so they cluster as a unit and can be wiped together later (e.g. a
+# settings reset). The defaults below mirror the in-code defaults in
+# state.py — keeping a single source of truth here means a default
+# tweak only needs to update one place (state.py imports nothing from
+# here, so we can't share by import without a circular dependency).
+
+REMINDER_INTERVAL_30M = 30 * 60
+REMINDER_INTERVAL_1H = 60 * 60
+REMINDER_INTERVAL_90M = 90 * 60
+REMINDER_INTERVAL_2H = 120 * 60
+REMINDER_INTERVAL_4H = 240 * 60
+REMINDER_INTERVALS = (
+    REMINDER_INTERVAL_30M,
+    REMINDER_INTERVAL_1H,
+    REMINDER_INTERVAL_90M,
+    REMINDER_INTERVAL_2H,
+    REMINDER_INTERVAL_4H,
+)
+REMINDER_INTERVAL_LABELS = {
+    REMINDER_INTERVAL_30M: "Every 30 minutes",
+    REMINDER_INTERVAL_1H:  "Every hour",
+    REMINDER_INTERVAL_90M: "Every 1.5 hours",
+    REMINDER_INTERVAL_2H:  "Every 2 hours",
+    REMINDER_INTERVAL_4H:  "Every 4 hours",
+}
+DEFAULT_REMINDER_INTERVAL = REMINDER_INTERVAL_1H
+DEFAULT_REMINDER_QUIET_START = 23 * 60
+DEFAULT_REMINDER_QUIET_END = 8 * 60
+
+
+def _reminder_block(cfg=None):
+    """Return the `reminder` sub-dict from the config, or an empty dict
+    when missing/malformed. Centralises the 'is the block usable?' check
+    so every reader doesn't have to repeat it."""
+    if cfg is None:
+        cfg = load_config()
+    raw = cfg.get("reminder")
+    return raw if isinstance(raw, dict) else {}
+
+
+def load_saved_reminder_enabled():
+    """Return the persisted reminder on/off flag. Defaults to False —
+    a brand-new buddy must not start nagging users about water without
+    them opting in via the About-window Reminders tab."""
+    return bool(_reminder_block().get("enabled", False))
+
+
+def load_saved_reminder_interval():
+    """Return the persisted reminder interval (seconds) — defaults to
+    1 hour, clamped to the documented preset set. Anything outside the
+    presets falls back to the default rather than being honoured: a
+    typo'd 5 would mean a reminder every 5 seconds, which is the kind
+    of foot-gun the validator exists to prevent."""
+    raw = _reminder_block().get("interval")
+    try:
+        raw = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_REMINDER_INTERVAL
+    if raw in REMINDER_INTERVALS:
+        return raw
+    return DEFAULT_REMINDER_INTERVAL
+
+
+def load_saved_reminder_sound():
+    """Return the persisted reminder sound name. Falls back to the
+    default ('water') for missing/unknown values so a corrupt config
+    still produces an audible reminder when fired."""
+    raw = _reminder_block().get("sound")
+    if isinstance(raw, str) and raw in REMINDER_SOUND_CHOICES:
+        return raw
+    return DEFAULT_REMINDER_SOUND
+
+
+def load_saved_reminder_quiet_hours():
+    """Return the reminder's quiet-hours window as
+    (start, end) minutes-from-midnight, defaulting to **23:00–08:00**
+    (per the M4 brief). Mixed None / non-int / out-of-range / zero-
+    length values fall back to the default rather than disabling the
+    window — the user explicitly enabled the reminder, so silent
+    nights are the expected behaviour even when the schema gets
+    munged."""
+    block = _reminder_block()
+    if "quiet_hours" not in block:
+        return DEFAULT_REMINDER_QUIET_START, DEFAULT_REMINDER_QUIET_END
+    raw = block.get("quiet_hours")
+    if raw is None:
+        # Explicit null ⇒ user disabled the reminder's quiet hours.
+        return None, None
+    if not isinstance(raw, dict):
+        return DEFAULT_REMINDER_QUIET_START, DEFAULT_REMINDER_QUIET_END
+    s = raw.get("start")
+    e = raw.get("end")
+    if not (isinstance(s, int) and isinstance(e, int)):
+        return DEFAULT_REMINDER_QUIET_START, DEFAULT_REMINDER_QUIET_END
+    if not (0 <= s < 1440 and 0 <= e < 1440):
+        return DEFAULT_REMINDER_QUIET_START, DEFAULT_REMINDER_QUIET_END
+    if s == e:
+        return DEFAULT_REMINDER_QUIET_START, DEFAULT_REMINDER_QUIET_END
+    return s, e
+
+
+def _save_reminder_field(field, value):
+    """Persist a single field inside the `reminder` sub-dict, creating
+    the dict on first write and skipping the file write when the value
+    didn't change."""
+    cfg = load_config()
+    block = cfg.get("reminder")
+    if not isinstance(block, dict):
+        block = {}
+    if block.get(field) == value:
+        return
+    block[field] = value
+    cfg["reminder"] = block
+    save_config(cfg)
+
+
+def save_reminder_enabled_pref(enabled):
+    _save_reminder_field("enabled", bool(enabled))
+
+
+def save_reminder_interval_pref(seconds):
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return
+    if seconds not in REMINDER_INTERVALS:
+        return
+    _save_reminder_field("interval", seconds)
+
+
+def save_reminder_sound_pref(name):
+    if name not in REMINDER_SOUND_CHOICES:
+        return
+    _save_reminder_field("sound", name)
+
+
+def save_reminder_quiet_hours_pref(start, end):
+    """Persist the reminder's quiet-hours window.
+
+    Inputs:
+      - `(None, None)` — explicit disable. Stored as null so the
+        absence of the key still resolves to the default; explicit
+        null means "user opted out".
+      - `(int, int)` — valid window. Both must be in [0, 1440) and
+        not equal (zero-length window is rejected).
+      - One None, one int — treated as a typo and **rejected**
+        (no write). Distinct meanings shouldn't share an input.
+    """
+    if start is None and end is None:
+        new_val = None
+    elif start is None or end is None:
+        return  # partial null — typo, not intent
+    else:
+        if not (isinstance(start, int) and isinstance(end, int)):
+            return
+        if not (0 <= start < 1440 and 0 <= end < 1440):
+            return
+        if start == end:
+            return
+        new_val = {"start": start, "end": end}
+    cfg = load_config()
+    block = cfg.get("reminder")
+    if not isinstance(block, dict):
+        block = {}
+    if "quiet_hours" in block and block.get("quiet_hours") == new_val:
+        return
+    block["quiet_hours"] = new_val
+    cfg["reminder"] = block
     save_config(cfg)

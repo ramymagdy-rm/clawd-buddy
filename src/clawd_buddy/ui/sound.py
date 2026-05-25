@@ -184,6 +184,61 @@ SOUND_PACK_NAMES = list(SOUND_PACKS.keys())        # display order for tray
 SOUND_PACK_CHOICES = [SOUND_PACK_OFF] + SOUND_PACK_NAMES
 
 
+# ── M4: water-reminder sounds ────────────────────────────────────────
+# Independent from SOUND_PACKS because the reminder is a different
+# *kind* of cue (a wellness nudge, not a Claude-Code event) and the
+# user picks its sound separately in the About-window Reminders tab.
+# Each entry is a no-arg PCM builder; the main loop builds them once
+# at startup via `init_reminder_sounds()` and stashes the resulting
+# pygame.mixer.Sound in a dict keyed by the same name.
+REMINDER_SOUND_OFF = "off"
+DEFAULT_REMINDER_SOUND = "water"
+
+
+def _pcm_water_drop():
+    """A single high-pitched bell tone (~880 Hz) with quick decay —
+    designed to cut through ambient noise without sounding alarming.
+    Distinctive against every event pack so users always recognise
+    "that's the water reminder" rather than "that's Claude finishing
+    something"."""
+    return _gen_bell_tone(880, 0.40, amplitude=9000)
+
+
+def _pcm_reminder_chime():
+    """Two-bell ascending chime — calmer than the water drop. For
+    users who find the 880 Hz tone too sharp."""
+    return _gen_bell_tone(523, 0.30) + _gen_bell_tone(659, 0.45)
+
+
+def _pcm_reminder_beep():
+    """Short square-wave triple-blip — more attention-grabbing for
+    users who tend to miss subtle nudges. 8-bit character so it's
+    obviously a notification, not background ambience."""
+    sq = {"shape": "square", "amplitude": 5200, "fade": 0.01}
+    return (
+        _gen_voices(659, 0.08, **sq)
+        + _gen_voices(523, 0.04, fade=0.005, amplitude=0)  # tiny gap
+        + _gen_voices(659, 0.08, **sq)
+        + _gen_voices(523, 0.04, fade=0.005, amplitude=0)
+        + _gen_voices(659, 0.12, **sq)
+    )
+
+
+REMINDER_SOUNDS = {
+    "water":  _pcm_water_drop,
+    "chime":  _pcm_reminder_chime,
+    "beep":   _pcm_reminder_beep,
+}
+REMINDER_SOUND_NAMES = list(REMINDER_SOUNDS.keys())
+REMINDER_SOUND_CHOICES = [REMINDER_SOUND_OFF] + REMINDER_SOUND_NAMES
+
+
+# Reminder base volume — slightly louder than wave (which is 0.45)
+# because the user explicitly opted in to being reminded, but quieter
+# than celebrate so it doesn't dominate the audio space.
+REMINDER_BASE_VOLUME = 0.50
+
+
 # Per-sound base volumes (the levels each pack was tuned at). The
 # user-facing "volume" preference is a 0.0–1.0 multiplier applied on
 # top — `apply_volume` re-sets every Sound's mixer volume to
@@ -193,14 +248,19 @@ SOUND_PACK_CHOICES = [SOUND_PACK_OFF] + SOUND_PACK_NAMES
 BASE_VOLUMES = {"celebrate": 0.55, "wave": 0.45}
 
 
-def apply_volume(sounds_by_pack, user_vol):
+def apply_volume(sounds_by_pack, user_vol, reminder_sounds=None):
     """Re-apply each pack's base volume scaled by `user_vol` (0.0–1.0).
 
     Called once at startup after init_sounds() and again whenever the
     user moves the tray Volume submenu. Each pack stores its Sound
     objects as `(celebrate, wave)` — we walk both and reset the volume
     on each. No-op when the sounds dict is empty (headless / mixer
-    init failed)."""
+    init failed).
+
+    `reminder_sounds` (M4) is the optional flat dict from
+    `init_reminder_sounds()` — same multiplier applies so the water
+    drop respects the user's volume slider too. Older callers can
+    omit it and only the event packs get rescaled."""
     try:
         user_vol = float(user_vol)
     except (TypeError, ValueError):
@@ -215,6 +275,12 @@ def apply_volume(sounds_by_pack, user_vol):
             # that case the next sound is already broken anyway, so we
             # swallow rather than crash the main loop.
             pass
+    if reminder_sounds:
+        for snd in reminder_sounds.values():
+            try:
+                snd.set_volume(REMINDER_BASE_VOLUME * user_vol)
+            except Exception:
+                pass
 
 
 def init_sounds(user_volume=1.0):
@@ -258,4 +324,33 @@ def init_sounds(user_volume=1.0):
         except pygame.error as e:
             print(f"[buddy] Could not build '{pack}' sounds: {e}")
     apply_volume(sounds, user_volume)
+    return sounds
+
+
+def init_reminder_sounds(user_volume=1.0):
+    """Build the reminder Sound objects (`{name: pygame.mixer.Sound}`).
+
+    Mirrors `init_sounds()` but for the flat M4 reminder registry —
+    no celebrate/wave pair structure since each reminder cue is a
+    single sound. Returns an empty dict on audio init failure so
+    callers can treat 'missing' as 'silent reminder', same contract
+    as the pack init.
+    """
+    import pygame
+    try:
+        # Skip mixer init — `init_sounds()` already did that. Calling
+        # `pygame.mixer.Sound` without an active mixer raises, so we
+        # treat that as the headless case.
+        if pygame.mixer.get_init() is None:
+            return {}
+    except pygame.error:
+        return {}
+    sounds = {}
+    for name, builder in REMINDER_SOUNDS.items():
+        try:
+            snd = pygame.mixer.Sound(buffer=builder())
+            sounds[name] = snd
+        except pygame.error as e:
+            print(f"[buddy] Could not build reminder sound '{name}': {e}")
+    apply_volume({}, user_volume, reminder_sounds=sounds)
     return sounds
