@@ -669,6 +669,251 @@ class TestQuietHoursHelpers:
         assert buddy_state._normalize_quiet(600, 600) == (None, None)
 
 
+# ── Water reminder (M4) ──────────────────────────────────────────────
+class TestReminderDefaults:
+    def test_disabled_by_default(self, state):
+        assert state.reminder_enabled is False
+
+    def test_default_interval_is_one_hour(self, state):
+        assert state.reminder_interval == 60 * 60
+
+    def test_default_sound_is_water(self, state):
+        assert state.reminder_sound == "water"
+
+    def test_default_quiet_hours_are_23_to_8(self, state):
+        assert state.reminder_quiet_start == 23 * 60
+        assert state.reminder_quiet_end == 8 * 60
+
+    def test_not_active_initially(self, state):
+        assert state.reminder_active is False
+
+    def test_seconds_until_next_is_none_when_disabled(self, state):
+        assert state.reminder_seconds_until_next() is None
+
+
+class TestReminderSetters:
+    def test_set_enabled_starts_timer_from_now(self, state, clock):
+        # Pre-existing _last_drink_ts (init time)
+        clock.advance(500)
+        state.set_reminder_enabled(True)
+        # Timer should have reset to "now" — seconds-until-next equals interval.
+        secs = state.reminder_seconds_until_next()
+        assert abs(secs - state.reminder_interval) < 1
+
+    def test_set_disabled_clears_active_alarm(self, state, clock):
+        # Disable reminder quiet hours so the test is wall-clock-
+        # independent (default 23–08 would silence the alarm on a
+        # CI box that happens to run at 02:00).
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        assert state.reminder_active is True
+        state.set_reminder_enabled(False)
+        assert state.reminder_active is False
+
+    def test_set_interval_only_accepts_presets(self, state):
+        state.set_reminder_interval(30 * 60)
+        assert state.reminder_interval == 30 * 60
+        # Bogus value normalises to the DEFAULT (1h) — better than
+        # silently honouring a 7-second reminder spam interval.
+        state.set_reminder_interval(7)
+        assert state.reminder_interval == 60 * 60
+        # Non-numeric also normalises to the default.
+        state.set_reminder_interval(90 * 60)
+        state.set_reminder_interval("garbage")
+        assert state.reminder_interval == 60 * 60
+
+    def test_set_interval_resets_timer(self, state, clock):
+        state.set_reminder_enabled(True)
+        clock.advance(500)
+        state.set_reminder_interval(90 * 60)
+        secs = state.reminder_seconds_until_next()
+        # Right after reset, should be ≈ 90 min.
+        assert abs(secs - 90 * 60) < 1
+
+    def test_set_sound_validates(self, state):
+        state.set_reminder_sound("chime")
+        assert state.reminder_sound == "chime"
+        state.set_reminder_sound("not-a-sound")
+        assert state.reminder_sound == "chime"  # unchanged
+
+    def test_set_sound_off(self, state):
+        state.set_reminder_sound("off")
+        assert state.reminder_sound == "off"
+
+    def test_set_quiet_hours_round_trip(self, state):
+        state.set_reminder_quiet_hours(22 * 60, 7 * 60)
+        assert state.reminder_quiet_start == 22 * 60
+        assert state.reminder_quiet_end == 7 * 60
+
+    def test_set_quiet_hours_none_disables(self, state):
+        state.set_reminder_quiet_hours(None, None)
+        assert state.reminder_quiet_start is None
+        assert state.reminder_quiet_end is None
+
+
+class TestReminderQuietHours:
+    def test_is_reminder_quiet_now_default_window(self, state):
+        # Default 23:00–08:00.
+        assert state.is_reminder_quiet_now(now_min=23 * 60 + 30) is True
+        assert state.is_reminder_quiet_now(now_min=3 * 60) is True
+        assert state.is_reminder_quiet_now(now_min=8 * 60) is False
+        assert state.is_reminder_quiet_now(now_min=10 * 60) is False
+
+    def test_is_reminder_quiet_independent_of_m3_quiet(self, state):
+        # M3 quiet hours are off by default; M4 is on (23–08). Confirms
+        # the two checks consult different fields.
+        assert state.is_quiet_now(now_min=23 * 60 + 30) is False
+        assert state.is_reminder_quiet_now(now_min=23 * 60 + 30) is True
+
+
+class TestReminderTick:
+    def test_disabled_never_fires(self, state, clock):
+        # Default is disabled — even a year later, nothing fires.
+        clock.advance(365 * 24 * 3600)
+        state.update()
+        assert state.reminder_active is False
+
+    def test_fires_after_interval(self, state, clock):
+        # Enable + simulate the start of the day so quiet hours don't
+        # block (the helper injects now_min through is_reminder_quiet_now,
+        # but the real _tick_reminder calls it without an arg → uses
+        # time.localtime). To keep this test deterministic, disable the
+        # reminder's quiet hours.
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        assert state.reminder_active is True
+
+    def test_does_not_fire_before_interval(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval - 60)
+        state.update()
+        assert state.reminder_active is False
+
+    def test_active_alarm_sets_bubble_text(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        assert state.bubble_text == "Drink water!"
+
+    def test_active_alarm_queues_sound_when_not_off(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   reminder_enabled=True,
+                                   reminder_sound="water",
+                                   reminder_quiet_start=None,
+                                   reminder_quiet_end=None)
+        clock.advance(s.reminder_interval + 1)
+        s.update()
+        assert s._pending_reminder_sound == "water"
+
+    def test_active_alarm_silent_when_sound_off(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   reminder_enabled=True,
+                                   reminder_sound="off",
+                                   reminder_quiet_start=None,
+                                   reminder_quiet_end=None)
+        clock.advance(s.reminder_interval + 1)
+        s.update()
+        assert s._pending_reminder_sound is None
+        # Visual cue still fires — only audio is muted.
+        assert s.reminder_active is True
+        assert s.bubble_text == "Drink water!"
+
+
+class TestReminderAcknowledge:
+    def test_drink_clears_active_alarm(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        assert state.reminder_active is True
+        state.drink_acknowledged()
+        assert state.reminder_active is False
+
+    def test_drink_resets_timer(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        state.drink_acknowledged()
+        secs = state.reminder_seconds_until_next()
+        assert abs(secs - state.reminder_interval) < 1
+
+    def test_drink_clears_reminder_bubble_only(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        assert state.bubble_text == "Drink water!"
+        state.drink_acknowledged()
+        assert state.bubble_text == ""
+
+    def test_drink_leaves_user_bubble_alone(self, state, clock):
+        state.set_reminder_quiet_hours(None, None)
+        state.set_reminder_enabled(True)
+        clock.advance(state.reminder_interval + 1)
+        state.update()
+        # User sends a --message while reminder is active.
+        state.set_message("deploy done")
+        assert state.bubble_text == "deploy done"
+        state.drink_acknowledged()
+        # _dismiss_reminder must not nuke the user's bubble.
+        assert state.bubble_text == "deploy done"
+
+
+class TestReminderInQuietHours:
+    """When the reminder's quiet hours are active, the alarm must not
+    fire and the timer must not accumulate — so the user wakes up to
+    a fresh interval, not an instant 7am ping."""
+
+    def test_does_not_fire_in_quiet(self, clock):
+        # Build a state with quiet hours covering "now". Inject now_min
+        # via the helper used by is_reminder_quiet_now... actually
+        # _tick_reminder reads time.localtime(). Test through the
+        # is_reminder_quiet_now path by spying on it.
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   reminder_enabled=True,
+                                   reminder_quiet_start=0,
+                                   reminder_quiet_end=1439)
+        # 23:59 → 00:00 wraps but here is_reminder_quiet_now will return
+        # True for almost any wall-clock minute. Confirm no alarm fires.
+        clock.advance(s.reminder_interval * 10)
+        s.update()
+        assert s.reminder_active is False
+
+    def test_timer_does_not_accumulate_in_quiet(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   reminder_enabled=True,
+                                   reminder_quiet_start=0,
+                                   reminder_quiet_end=1439)
+        clock.advance(s.reminder_interval * 5)
+        s.update()
+        # _last_drink_ts should have slid forward to ≈ now.
+        # i.e. seconds_until_next ≈ full interval.
+        secs = s.reminder_seconds_until_next()
+        assert abs(secs - s.reminder_interval) < 2
+
+
+class TestReminderIntervalHelper:
+    def test_known_intervals_pass_through(self):
+        assert buddy_state._normalize_reminder_interval(30 * 60) == 30 * 60
+        assert buddy_state._normalize_reminder_interval(60 * 60) == 60 * 60
+        assert buddy_state._normalize_reminder_interval(240 * 60) == 240 * 60
+
+    def test_unknown_value_falls_back_to_default(self):
+        assert buddy_state._normalize_reminder_interval(7) == 60 * 60
+        assert buddy_state._normalize_reminder_interval(99999) == 60 * 60
+
+    def test_non_numeric_falls_back(self):
+        assert buddy_state._normalize_reminder_interval("hourly") == 60 * 60
+        assert buddy_state._normalize_reminder_interval(None) == 60 * 60
+
+
 # ── Sound pack interaction ───────────────────────────────────────────
 class TestSoundIntegration:
     def test_celebrate_queues_sound_when_pack_enabled(self, clock):

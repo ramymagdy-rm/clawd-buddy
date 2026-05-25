@@ -38,6 +38,8 @@ class TestDefaults:
         assert args.theme is None
         assert args.message is None
         assert args.status is False
+        # M4 additions.
+        assert args.drank is False
 
 
 # ── Individual flag parsing ──────────────────────────────────────────
@@ -105,6 +107,11 @@ class TestFlags:
 
     def test_status_flag(self):
         assert cli.parse_args(["--status"]).status is True
+
+    def test_drank_flag(self):
+        # M4: --drank is the external acknowledgment for the
+        # water-drinking reminder.
+        assert cli.parse_args(["--drank"]).drank is True
 
 
 # ── --version short-circuits with exit code 0 ────────────────────────

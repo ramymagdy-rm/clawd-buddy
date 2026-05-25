@@ -313,3 +313,127 @@ class TestPublicPresets:
             assert isinstance(s, int) and 0 <= s < 1440
             assert isinstance(e, int) and 0 <= e < 1440
             assert s != e
+
+
+# ── Water-reminder preferences (M4) ──────────────────────────────────
+class TestReminderEnabledPref:
+    def test_default_is_false(self, isolated_config_dir):
+        assert config.load_saved_reminder_enabled() is False
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_reminder_enabled_pref(True)
+        assert config.load_saved_reminder_enabled() is True
+
+    def test_round_trip_false(self, isolated_config_dir):
+        config.save_reminder_enabled_pref(True)
+        config.save_reminder_enabled_pref(False)
+        assert config.load_saved_reminder_enabled() is False
+
+    def test_skips_write_when_unchanged(self, isolated_config_dir):
+        config.save_reminder_enabled_pref(True)
+        mtime = (isolated_config_dir / "config.json").stat().st_mtime_ns
+        config.save_reminder_enabled_pref(True)
+        assert (isolated_config_dir / "config.json").stat().st_mtime_ns == mtime
+
+    def test_lives_under_reminder_subdict(self, isolated_config_dir):
+        # Schema: prefs cluster under a `reminder` block — easier to
+        # wipe all of them with one delete operation.
+        config.save_reminder_enabled_pref(True)
+        data = json.loads((isolated_config_dir / "config.json").read_text())
+        assert "reminder" in data
+        assert data["reminder"]["enabled"] is True
+
+
+class TestReminderIntervalPref:
+    def test_default_is_one_hour(self, isolated_config_dir):
+        assert config.load_saved_reminder_interval() == 60 * 60
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_reminder_interval_pref(30 * 60)
+        assert config.load_saved_reminder_interval() == 30 * 60
+
+    def test_save_rejects_unknown_preset(self, isolated_config_dir):
+        config.save_reminder_interval_pref(7)
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_save_rejects_non_int(self, isolated_config_dir):
+        config.save_reminder_interval_pref("hourly")
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_load_corrupt_falls_back_to_default(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"reminder": {"interval": 7}}))
+        assert config.load_saved_reminder_interval() == 60 * 60
+
+
+class TestReminderSoundPref:
+    def test_default_when_unset(self, isolated_config_dir):
+        assert config.load_saved_reminder_sound() == "water"
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_reminder_sound_pref("chime")
+        assert config.load_saved_reminder_sound() == "chime"
+
+    def test_save_rejects_unknown(self, isolated_config_dir):
+        config.save_reminder_sound_pref("ocean")
+        assert not (isolated_config_dir / "config.json").exists()
+
+    def test_load_corrupt_falls_back(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"reminder": {"sound": "ocean"}}))
+        assert config.load_saved_reminder_sound() == "water"
+
+
+class TestReminderQuietHoursPref:
+    def test_default_is_23_to_8(self, isolated_config_dir):
+        # The whole point of M4's quiet-hours default — brand-new
+        # buddy with the reminder on must NOT ping at 3am.
+        s, e = config.load_saved_reminder_quiet_hours()
+        assert s == 23 * 60
+        assert e == 8 * 60
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_reminder_quiet_hours_pref(22 * 60, 7 * 60)
+        assert config.load_saved_reminder_quiet_hours() == (22 * 60, 7 * 60)
+
+    def test_save_none_persists_as_disabled(self, isolated_config_dir):
+        config.save_reminder_quiet_hours_pref(None, None)
+        # Explicit null in the JSON ⇒ load returns (None, None).
+        s, e = config.load_saved_reminder_quiet_hours()
+        assert s is None and e is None
+
+    def test_save_rejects_partial(self, isolated_config_dir):
+        config.save_reminder_quiet_hours_pref(23 * 60, None)
+        # Falls through to default because no `reminder` block was created.
+        s, e = config.load_saved_reminder_quiet_hours()
+        assert s == 23 * 60
+        assert e == 8 * 60
+
+    def test_save_rejects_zero_length(self, isolated_config_dir):
+        config.save_reminder_quiet_hours_pref(600, 600)
+        # No write happens — falls through to default.
+        s, e = config.load_saved_reminder_quiet_hours()
+        assert s == 23 * 60
+
+    def test_load_corrupt_falls_back_to_default(self, isolated_config_dir):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "config.json").write_text(
+            json.dumps({"reminder": {"quiet_hours": "23:00-08:00"}}))
+        # String, not dict ⇒ default
+        s, e = config.load_saved_reminder_quiet_hours()
+        assert s == 23 * 60
+
+
+class TestReminderPublicSurface:
+    def test_intervals_are_sorted_and_distinct(self):
+        assert config.REMINDER_INTERVALS == tuple(
+            sorted(config.REMINDER_INTERVALS))
+        assert len(set(config.REMINDER_INTERVALS)) == \
+            len(config.REMINDER_INTERVALS)
+
+    def test_every_interval_has_a_label(self):
+        for sec in config.REMINDER_INTERVALS:
+            assert sec in config.REMINDER_INTERVAL_LABELS
+            assert config.REMINDER_INTERVAL_LABELS[sec]
