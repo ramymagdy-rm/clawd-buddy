@@ -47,6 +47,10 @@ from .cli import parse_args, read_hook_stdin
 from .config import (
     load_saved_quiet_hours,
     load_saved_reduce_motion,
+    load_saved_reminder_enabled,
+    load_saved_reminder_interval,
+    load_saved_reminder_quiet_hours,
+    load_saved_reminder_sound,
     load_saved_sound_pack,
     load_saved_theme,
     load_saved_volume,
@@ -69,7 +73,7 @@ from .platform import (
 )
 from .state import BuddyState
 from .ui.drawing import draw_buddy
-from .ui.sound import apply_volume, init_sounds
+from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
 from .ui.tray import create_tray
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
@@ -118,10 +122,10 @@ def main():
         print(json.dumps(info, indent=2))
         sys.exit(0)
 
-    # --send / --wave / --top / --quit / --prompt-start / --message
+    # --send / --wave / --top / --quit / --prompt-start / --message / --drank
     # (any of these signals a running instance and exits)
     if (args.send is not None or args.wave or args.top or args.quit
-            or args.prompt_start or args.message is not None):
+            or args.prompt_start or args.message is not None or args.drank):
         payload_obj = {}
         if args.quit:
             payload_obj["action"] = "quit"
@@ -129,6 +133,9 @@ def main():
             payload_obj["action"] = "raise"
         elif args.wave:
             payload_obj["action"] = "wave"
+        elif args.drank:
+            # M4: external acknowledgment for the water-reminder.
+            payload_obj["action"] = "drank"
         elif args.message is not None:
             payload_obj["action"] = "message"
             payload_obj["text"] = args.message
@@ -207,8 +214,11 @@ def main():
     # M3: load accessibility / comfort prefs (reduce-motion, volume,
     # quiet-hours) alongside the existing theme + sound-pack prefs so
     # the buddy launches with whatever the user last configured.
+    # M4: load reminder prefs (enabled, interval, sound, reminder
+    # quiet-hours) the same way.
     saved_volume = load_saved_volume()
     saved_quiet_start, saved_quiet_end = load_saved_quiet_hours()
+    saved_reminder_qs, saved_reminder_qe = load_saved_reminder_quiet_hours()
     state = BuddyState(
         theme_name=args.theme,
         sound_pack=load_saved_sound_pack(),
@@ -216,6 +226,11 @@ def main():
         volume=saved_volume,
         quiet_start=saved_quiet_start,
         quiet_end=saved_quiet_end,
+        reminder_enabled=load_saved_reminder_enabled(),
+        reminder_interval=load_saved_reminder_interval(),
+        reminder_sound=load_saved_reminder_sound(),
+        reminder_quiet_start=saved_reminder_qs,
+        reminder_quiet_end=saved_reminder_qe,
     )
     state.topmost = topmost
 
@@ -223,6 +238,10 @@ def main():
     # missing audio device — we still run silently in that case. Every
     # pack's Sound objects are pre-built so tray previews are instant.
     sounds_by_pack = init_sounds(user_volume=saved_volume)
+    # M4: reminder sounds live in their own dict (single sounds, not
+    # celebrate/wave pairs) — built after init_sounds so we share the
+    # already-initialised mixer.
+    reminder_sounds = init_reminder_sounds(user_volume=saved_volume)
 
     if args.test:
         state.trigger()
@@ -269,9 +288,12 @@ def main():
         # thread and flips _volume_changed; the main loop re-applies
         # the multiplier to every cached pygame Sound. Same pattern
         # as _scale_changed — keeps mixer access single-threaded.
+        # M4: include the reminder sounds in the re-apply pass so
+        # the water drop also follows the volume slider.
         if state._volume_changed:
             state._volume_changed = False
-            apply_volume(sounds_by_pack, state.volume)
+            apply_volume(sounds_by_pack, state.volume,
+                         reminder_sounds=reminder_sounds)
 
         # Drain pending notification sound. Producers (socket listener,
         # tray callbacks, key handler) just set the flag; playback happens
@@ -294,6 +316,24 @@ def main():
                     except pygame.error as e:
                         print(f"[buddy] Sound play failed: {e}")
 
+        # M4: drain pending reminder sound. Independent from the event
+        # sound pipeline above — reminders have their own quiet-hours
+        # window (state.is_reminder_quiet_now) and their own Sound dict.
+        # The state's `_tick_reminder` already suppresses queueing
+        # during reminder quiet hours, but we re-check at play time for
+        # the same reason as the event pipeline: tray previews route
+        # through the same flag and should respect the window too.
+        if state._pending_reminder_sound is not None:
+            rname = state._pending_reminder_sound
+            state._pending_reminder_sound = None
+            if not state.is_reminder_quiet_now():
+                snd = reminder_sounds.get(rname)
+                if snd is not None:
+                    try:
+                        snd.play()
+                    except pygame.error as e:
+                        print(f"[buddy] Reminder sound play failed: {e}")
+
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 running = False
@@ -301,7 +341,15 @@ def main():
                 if ev.key == pygame.K_ESCAPE:
                     running = False
                 elif ev.key == pygame.K_SPACE:
-                    state.trigger()
+                    # M4: Space is mode-aware. If a water reminder is
+                    # firing, Space means "I drank" (acknowledge +
+                    # reset timer). Otherwise it keeps its existing
+                    # "test celebration" behaviour so users haven't
+                    # lost a familiar shortcut.
+                    if state.reminder_active:
+                        state.drink_acknowledged()
+                    else:
+                        state.trigger()
                 elif ev.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
                     # Ctrl+1..4 resizes the buddy. Theme switching is now
                     # exclusively via the tray Theme submenu.

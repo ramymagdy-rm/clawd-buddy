@@ -4,6 +4,80 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.16] - 2026-05-25
+
+### Added — Milestone 4: Wellness nudges
+
+- **Water-drinking reminder.** The buddy can now nudge you to drink
+  water on a configurable schedule. Off by default — opt in via the
+  system-tray **Water Reminder** toggle or the new About-window
+  **Reminders** tab.
+  - **Interval**: pick one of `30 min`, `1 h`, `1.5 h`, `2 h`, `4 h`.
+  - **Distinctive sound**: a high-pitched water-drop bell (default),
+    a calmer two-bell chime, a square-wave triple-beep, or off.
+  - **Acknowledge with Space** while the reminder is firing. Space
+    keeps its old "test celebration" meaning when no alarm is active
+    — the binding is mode-aware. The tray menu also surfaces an
+    "I drank water" entry whenever an alarm is up.
+  - **Quiet hours** independent from the M3 notification quiet-hours
+    — default 23:00–08:00. Inside the window the timer doesn't
+    accumulate, so a user wakes up to a full interval rather than a
+    7am water-spam.
+  - **Reminder bubble** ("Drink water!") appears above the buddy
+    while the alarm is active, and survives a `--message` ping
+    expiring (the user's bubble takes precedence briefly, the
+    reminder text returns when their bubble clears).
+- **Tabbed About dialog.** The existing card moved into an **About**
+  tab; the new **Reminders** tab is the rich editing surface
+  (enable, interval, sound, quiet-hours start/end via 30-min HH:MM
+  comboboxes, a live countdown, and a "Drank now" button).
+- **`drank` IPC action** + **`--drank` CLI flag**. External tools
+  (smart bottles, wrist macros, scripts) can acknowledge the
+  reminder remotely. Fire-and-forget — exits 0 on delivery, 1 if no
+  buddy is listening.
+- **`--status` payload** gains a `reminder` block: `enabled`,
+  `interval_seconds`, `sound`, `quiet_hours` (null or HH:MM dict),
+  `active`, `seconds_until_next` (null when the reminder is
+  disabled; 0 when an alarm is firing; positive otherwise).
+
+### Changed
+
+- `BuddyState.__init__` accepts five new keyword arguments
+  (`reminder_enabled`, `reminder_interval`, `reminder_sound`,
+  `reminder_quiet_start`, `reminder_quiet_end`); defaults preserve
+  pre-M4 behaviour (reminder off; if turned on, 1h interval with
+  23:00–08:00 quiet hours).
+- `BuddyState.update()` calls a new `_tick_reminder` once per frame.
+  Cheap when disabled — single bool check + return — so users who
+  haven't opted in pay almost nothing.
+- `clawd_buddy.ui.sound` adds a `REMINDER_SOUNDS` registry (`water`
+  / `chime` / `beep`), a `REMINDER_BASE_VOLUME` constant, and an
+  `init_reminder_sounds(user_volume)` builder. `apply_volume()`
+  takes a new `reminder_sounds=` keyword so the water drop respects
+  the volume slider too.
+- `clawd_buddy.config` exposes `REMINDER_INTERVALS`,
+  `REMINDER_INTERVAL_LABELS`, and load/save helpers under a
+  `reminder` sub-dict (clusters the prefs and makes a "settings
+  reset" trivial later).
+- System-tray menu gains a top-level **Water Reminder** checkmark
+  toggle and a conditional **I drank water** entry that only
+  appears while an alarm is active.
+- The About menu item is now labelled **About…** to hint at the
+  richer dialog content.
+
+### Documentation
+
+- `.ai/decisions/2026-05-25-milestone-4-wellness-nudges.md` — design
+  rationale covering the resume-thinking-style flag flow, why
+  reminder quiet-hours are separate from M3's, the bubble-overlay
+  reuse for the visual cue, the play-time vs trigger-time sound
+  gate, and the schema decision to cluster reminder prefs under a
+  `reminder` sub-dict.
+- `README.md` — new **Water reminder** section; tray menu list
+  updated; CLI reference includes `--drank`; `--status` example
+  shows the new `reminder` block.
+- `.ai/feature-map.md` and `.ai/roadmap.md` — M4 marked shipped.
+
 ## [0.1.15] - 2026-05-25
 
 ### Fixed — thinking animation no longer drops after an attention cue

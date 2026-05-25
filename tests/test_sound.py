@@ -206,3 +206,61 @@ class TestApplyVolume:
         # Headless / mixer-init-failed path returns an empty dict —
         # apply_volume on it must be a clean no-op.
         sound.apply_volume({}, 0.7)
+
+
+# ── Reminder sound registry (M4) ─────────────────────────────────────
+class TestReminderRegistry:
+    def test_choices_starts_with_off(self):
+        # Same convention as SOUND_PACK_CHOICES — off comes first so
+        # the About-window combobox renders consistently.
+        assert sound.REMINDER_SOUND_CHOICES[0] == sound.REMINDER_SOUND_OFF
+
+    def test_default_is_water(self):
+        assert sound.DEFAULT_REMINDER_SOUND == "water"
+        assert sound.DEFAULT_REMINDER_SOUND in sound.REMINDER_SOUNDS
+
+    def test_off_is_not_a_real_sound(self):
+        assert sound.REMINDER_SOUND_OFF not in sound.REMINDER_SOUNDS
+
+    def test_choices_covers_off_plus_every_sound(self):
+        expected = {sound.REMINDER_SOUND_OFF, *sound.REMINDER_SOUND_NAMES}
+        assert set(sound.REMINDER_SOUND_CHOICES) == expected
+
+    @pytest.mark.parametrize("name", list(sound.REMINDER_SOUNDS.keys()))
+    def test_each_sound_is_a_callable(self, name):
+        assert callable(sound.REMINDER_SOUNDS[name])
+
+    @pytest.mark.parametrize("name", list(sound.REMINDER_SOUNDS.keys()))
+    def test_each_sound_produces_pcm(self, name):
+        pcm = sound.REMINDER_SOUNDS[name]()
+        assert isinstance(pcm, (bytes, bytearray))
+        assert len(pcm) > 0
+        assert len(pcm) % BYTES_PER_FRAME == 0
+
+
+class TestReminderApplyVolume:
+    """apply_volume gained a reminder_sounds kwarg in M4; the M3 path
+    still has to behave exactly as before when it's omitted."""
+
+    def test_reminder_sounds_get_scaled_too(self):
+        packs = {"fanfare": (_FakeSound(), _FakeSound())}
+        reminders = {"water": _FakeSound(), "chime": _FakeSound()}
+        sound.apply_volume(packs, 0.5, reminder_sounds=reminders)
+        for snd in reminders.values():
+            assert snd.volume == sound.REMINDER_BASE_VOLUME * 0.5
+
+    def test_reminder_sounds_optional_keeps_packs_working(self):
+        packs = {"fanfare": (_FakeSound(), _FakeSound())}
+        sound.apply_volume(packs, 0.7)  # no reminder_sounds arg
+        cel, _ = packs["fanfare"]
+        assert cel.volume == sound.BASE_VOLUMES["celebrate"] * 0.7
+
+    def test_reminder_sounds_clamp_high(self):
+        reminders = {"water": _FakeSound()}
+        sound.apply_volume({}, 5.0, reminder_sounds=reminders)
+        assert reminders["water"].volume == sound.REMINDER_BASE_VOLUME
+
+    def test_reminder_sounds_garbage_is_noop(self):
+        reminders = {"water": _FakeSound()}
+        sound.apply_volume({}, "loud", reminder_sounds=reminders)
+        assert reminders["water"].volume is None

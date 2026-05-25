@@ -128,6 +128,13 @@ def build_parser():
                    help="Disable run at login/startup and exit")
     p.add_argument("--fg", action="store_true",
                    help="Run in foreground (default auto-detaches)")
+    # M4: external acknowledgment for the water-drinking reminder.
+    # Mirrors `--wave` and `--send` (fire-and-forget; exits with 0 on
+    # delivery, 1 if no buddy is listening). Useful for smart-bottle
+    # integrations or "drank from the kitchen tap" wrist macros.
+    p.add_argument("--drank", action="store_true",
+                   help=("Tell the running buddy you drank water — clears "
+                         "any active reminder alarm and resets the timer."))
     return p
 
 
