@@ -335,9 +335,11 @@ class TestStatusReminderBlock:
         resp = ipc.build_status_response(state)
         assert "reminder" in resp
         block = resp["reminder"]
-        # `anchor` joined the block in M4.3.
+        # `anchor` joined the block in M4.3; `cups_today`, `today_date`,
+        # `recent_days` in M4.1.
         for key in ("enabled", "interval_seconds", "anchor", "sound",
-                    "quiet_hours", "active", "seconds_until_next"):
+                    "quiet_hours", "active", "seconds_until_next",
+                    "cups_today", "today_date", "recent_days"):
             assert key in block
 
     def test_reminder_block_disabled_defaults(self, state):
@@ -376,6 +378,31 @@ class TestStatusReminderBlock:
         block = ipc.build_status_response(state)["reminder"]
         assert block["active"] is True
         assert block["seconds_until_next"] == 0
+
+    def test_history_defaults_in_status(self, state):
+        block = ipc.build_status_response(state)["reminder"]
+        assert block["cups_today"] == 0
+        assert block["today_date"] is None
+        assert block["recent_days"] == []
+
+    def test_history_reflects_drink_ack(self, state):
+        state.drink_acknowledged()
+        state.drink_acknowledged()
+        block = ipc.build_status_response(state)["reminder"]
+        assert block["cups_today"] == 2
+        assert isinstance(block["today_date"], str)
+        assert len(block["today_date"]) == 10  # YYYY-MM-DD
+
+    def test_history_recent_days_in_status(self, state):
+        state.recent_days = [{"date": "2026-05-24", "count": 6}]
+        block = ipc.build_status_response(state)["reminder"]
+        assert block["recent_days"] == [{"date": "2026-05-24", "count": 6}]
+
+    def test_history_recent_days_is_defensive_copy(self, state):
+        state.recent_days = [{"date": "2026-05-24", "count": 6}]
+        block = ipc.build_status_response(state)["reminder"]
+        block["recent_days"].append({"date": "BAD", "count": 99})
+        assert state.recent_days == [{"date": "2026-05-24", "count": 6}]
 
     def test_status_response_with_reminder_is_json_serialisable(self, state):
         state.set_reminder_enabled(True)

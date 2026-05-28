@@ -1041,6 +1041,241 @@ class TestReminderIntervalHelper:
         assert buddy_state._normalize_reminder_interval(None) == 60 * 60
 
 
+# ── Drinking history (M4.1) ──────────────────────────────────────────
+class _RecordingHistorySave:
+    """Tiny callable that records the args every time it's called, so
+    tests can assert on what the state handed to the persistence layer."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, today, recent):
+        # Defensive copy — we want to observe what the state held at
+        # the moment of save, not whatever it looked like later.
+        self.calls.append((
+            dict(today) if today is not None else None,
+            [dict(e) for e in recent],
+        ))
+
+
+class TestHistoryDefaults:
+    def test_starts_at_zero(self, state):
+        assert state.cups_today == 0
+
+    def test_recent_days_starts_empty(self, state):
+        assert state.recent_days == []
+
+    def test_today_date_starts_unset(self, state):
+        assert state.cups_today_date is None
+
+
+class TestHistorySeeding:
+    """Constructor seeds the in-memory counter from a (today, recent)
+    snapshot — that's how app.py restores the previous run on startup."""
+
+    def test_seeds_from_constructor_args(self, clock):
+        s = buddy_state.BuddyState(
+            sound_pack="off", clock=clock,
+            cups_today=4, cups_today_date="2026-05-25",
+            recent_days=[
+                {"date": "2026-05-24", "count": 6},
+                {"date": "2026-05-23", "count": 5},
+            ],
+        )
+        assert s.cups_today == 4
+        assert s.cups_today_date == "2026-05-25"
+        assert len(s.recent_days) == 2
+
+    def test_rejects_negative_seed(self, clock):
+        s = buddy_state.BuddyState(
+            sound_pack="off", clock=clock,
+            cups_today=-3, cups_today_date="2026-05-25",
+        )
+        assert s.cups_today == 0
+
+    def test_rejects_non_int_seed(self, clock):
+        s = buddy_state.BuddyState(
+            sound_pack="off", clock=clock,
+            cups_today="five", cups_today_date="2026-05-25",
+        )
+        assert s.cups_today == 0
+
+    def test_rejects_malformed_date_seed(self, clock):
+        s = buddy_state.BuddyState(
+            sound_pack="off", clock=clock,
+            cups_today=3, cups_today_date="bogus",
+        )
+        assert s.cups_today_date is None
+
+    def test_drops_malformed_recent_entries(self, clock):
+        s = buddy_state.BuddyState(
+            sound_pack="off", clock=clock,
+            recent_days=[
+                {"date": "2026-05-24", "count": 6},          # ok
+                {"date": "bogus", "count": 5},               # bad date
+                {"date": "2026-05-23", "count": -1},         # negative
+                "not a dict",                                # wrong type
+                {"date": "2026-05-22", "count": 4},          # ok
+            ],
+        )
+        assert s.recent_days == [
+            {"date": "2026-05-24", "count": 6},
+            {"date": "2026-05-22", "count": 4},
+        ]
+
+    def test_trims_seed_to_cap(self, clock):
+        oversized = [{"date": f"2026-04-{d:02d}", "count": d}
+                     for d in range(1, buddy_state.HISTORY_RECENT_DAYS_MAX + 5)]
+        s = buddy_state.BuddyState(
+            sound_pack="off", clock=clock, recent_days=oversized,
+        )
+        assert len(s.recent_days) == buddy_state.HISTORY_RECENT_DAYS_MAX
+
+
+class TestHistoryAcknowledge:
+    def test_drink_increments_cup_count(self, state):
+        assert state.cups_today == 0
+        state.drink_acknowledged()
+        assert state.cups_today == 1
+        state.drink_acknowledged()
+        state.drink_acknowledged()
+        assert state.cups_today == 3
+
+    def test_drink_stamps_today_date_on_first_ack(self, state, clock):
+        # Clock starts at fixed value — the date string is whatever
+        # localtime gives for that timestamp. We don't care about the
+        # exact value, only that it's set + iso-shaped.
+        state.drink_acknowledged()
+        assert state.cups_today_date is not None
+        assert len(state.cups_today_date) == 10
+        assert state.cups_today_date[4] == "-"
+        assert state.cups_today_date[7] == "-"
+
+    def test_drink_persists_via_history_save_fn(self, clock):
+        save = _RecordingHistorySave()
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   history_save_fn=save)
+        s.drink_acknowledged()
+        assert len(save.calls) == 1
+        today, recent = save.calls[0]
+        assert today["count"] == 1
+        assert recent == []
+
+    def test_no_save_fn_means_no_disk_write(self, state):
+        # Default fixture has no history_save_fn — drink_acknowledged
+        # must not crash. The count still increments in memory.
+        state.drink_acknowledged()
+        assert state.cups_today == 1
+
+    def test_save_fn_failure_is_non_fatal(self, clock):
+        def boom(today, recent):
+            raise OSError("disk on fire")
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   history_save_fn=boom)
+        # Must not propagate — drink_acknowledged is called from the
+        # main render loop and crashing the buddy because a save
+        # failed would be the wrong contract.
+        s.drink_acknowledged()
+        assert s.cups_today == 1
+
+
+class TestHistoryDayRollover:
+    """When the local calendar day changes, the in-progress count
+    closes out into `recent_days` and `cups_today` resets to 0."""
+
+    def test_same_day_no_rollover(self, state):
+        # Calling _roll twice in the same tick must be idempotent.
+        state.drink_acknowledged()
+        state.drink_acknowledged()
+        state._roll_history_day_if_needed()
+        state._roll_history_day_if_needed()
+        assert state.cups_today == 2
+        assert state.recent_days == []
+
+    def test_explicit_rollover_via_date_swap(self, state):
+        # Force a rollover by mutating `cups_today_date` to yesterday
+        # (the easiest way to drive _roll deterministically without
+        # advancing the system clock).
+        state.drink_acknowledged()
+        state.drink_acknowledged()
+        state.drink_acknowledged()
+        state.cups_today_date = "2026-05-24"  # pretend yesterday
+        state._roll_history_day_if_needed()
+        assert state.cups_today == 0
+        assert state.recent_days == [{"date": "2026-05-24", "count": 3}]
+
+    def test_rollover_skips_zero_cup_day(self, state):
+        # An idle day shouldn't pollute the recent list with a 0 row.
+        state.cups_today_date = "2026-05-24"  # stamp yesterday, no drinks
+        state._roll_history_day_if_needed()
+        assert state.recent_days == []
+
+    def test_rollover_trims_recent_to_cap(self, state):
+        # Pre-load the recent list at the cap. Roll over one more day.
+        state.recent_days = [
+            {"date": f"2026-04-{d:02d}", "count": d}
+            for d in range(1, buddy_state.HISTORY_RECENT_DAYS_MAX + 1)
+        ]
+        state.drink_acknowledged()
+        state.cups_today_date = "2026-05-24"
+        state._roll_history_day_if_needed()
+        assert len(state.recent_days) == buddy_state.HISTORY_RECENT_DAYS_MAX
+        # Newest entry is at the front.
+        assert state.recent_days[0]["date"] == "2026-05-24"
+
+    def test_first_call_stamps_date_without_close_out(self, state):
+        # `cups_today_date` is None initially — first _roll should just
+        # stamp today, not push a zero entry.
+        assert state.cups_today_date is None
+        state._roll_history_day_if_needed()
+        assert state.cups_today_date is not None
+        assert state.recent_days == []
+
+
+class TestHistorySnapshot:
+    def test_snapshot_returns_today_and_recent(self, state):
+        state.drink_acknowledged()
+        state.drink_acknowledged()
+        today, recent = state.history_snapshot()
+        assert today["count"] == 2
+        assert recent == []
+
+    def test_snapshot_today_none_when_no_drinks_yet(self, state):
+        today, recent = state.history_snapshot()
+        assert today is None
+        assert recent == []
+
+    def test_snapshot_recent_is_defensive_copy(self, state):
+        state.recent_days = [{"date": "2026-05-24", "count": 6}]
+        _, recent = state.history_snapshot()
+        recent.append({"date": "BAD", "count": 99})  # mutate the copy
+        assert state.recent_days == [{"date": "2026-05-24", "count": 6}]
+
+
+class TestHistoryUpdateTick:
+    def test_update_triggers_rollover(self, state):
+        state.drink_acknowledged()
+        state.cups_today_date = "2026-05-24"  # simulate cross-midnight
+        state.update()
+        assert state.cups_today == 0
+        assert state.recent_days[0]["date"] == "2026-05-24"
+
+
+class TestHistoryDateHelper:
+    def test_today_iso_shape(self, state):
+        s = state._today_iso()
+        assert len(s) == 10 and s[4] == "-" and s[7] == "-"
+        # All numeric parts.
+        for part in s.split("-"):
+            int(part)
+
+    def test_is_iso_date_str_helper(self):
+        assert buddy_state._is_iso_date_str("2026-05-25") is True
+        assert buddy_state._is_iso_date_str("bogus") is False
+        assert buddy_state._is_iso_date_str(None) is False
+        assert buddy_state._is_iso_date_str("2026-13-01") is False
+
+
 class TestReminderAnchorHelpers:
     """M4.3: the daily anchor + slot-arithmetic helpers."""
 
