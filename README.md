@@ -104,6 +104,44 @@ meant to sleep through. Reminder prefs persist under a `reminder`
 block in `config.json` (`enabled`, `interval`, `anchor_minute`,
 `sound`, `quiet_hours`).
 
+### Drinking history
+
+Every drink-ack — Space, the tray entry, the About-window button, or
+`clawd-buddy --drank` — increments a per-day cup counter that lives in
+**`~/.clawd-buddy/history.json`** (`C:\Users\<name>\.clawd-buddy\` on
+Windows, `~/.clawd-buddy/` on Linux). The path is intentionally
+separate from `config.json` — settings sit in the platform config dir,
+**runtime data sits in the home directory** where it's easy to back up
+or sync via dotfile management.
+
+The **About → Reminders** tab shows:
+
+- **`3 cups today`** (bold headline, with singular/plural handling)
+- **`Recent days: 6 · 5 · 7 · 4 · 5 · 6 · 3`** (last 7 days, newest first)
+
+Both lines tick live on the same 1 Hz refresh as the countdown, and
+update immediately when you click the **I drank water now** button.
+
+Crossing local midnight closes out the in-progress day into the recent
+list and resets the count to zero. Empty days (zero acks) are skipped
+so the recent list only carries meaningful data.
+
+Schema (small enough to hand-edit if you ever need to):
+
+```json
+{
+  "today":  { "date": "2026-05-25", "count": 3 },
+  "recent": [
+    { "date": "2026-05-24", "count": 6 },
+    { "date": "2026-05-23", "count": 5 }
+  ]
+}
+```
+
+The counter is independent of whether the reminder is enabled — manual
+logging works either way, so you can use the buddy as a pure water-
+tracker without the nag.
+
 ### Themes
 
 Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
@@ -387,7 +425,7 @@ buddy writes a JSON snapshot back on the same socket before closing:
 ```bash
 $ clawd-buddy --status
 {
-  "version": "0.1.16",
+  "version": "0.1.19",
   "pid": 12345,
   "port": 44556,
   "mode": "idle",
@@ -409,15 +447,22 @@ $ clawd-buddy --status
     "sound": "water",
     "quiet_hours": {"start": "23:00", "end": "08:00"},
     "active": false,
-    "seconds_until_next": 1742
+    "seconds_until_next": 1742,
+    "cups_today": 3,
+    "today_date": "2026-05-25",
+    "recent_days": [
+      {"date": "2026-05-24", "count": 6},
+      {"date": "2026-05-23", "count": 5}
+    ]
   }
 }
 ```
 
 `reduce_motion`, `volume`, and `quiet_hours` were added in v0.1.15;
 the `reminder` block was added in v0.1.16; `reminder.anchor` (the daily
-schedule start time) was added in v0.1.18. Both `quiet_hours` keys are
-`null` when their respective window is disabled;
+schedule start time) was added in v0.1.18; `cups_today`, `today_date`,
+and `recent_days` (the M4.1 drinking history) in v0.1.19. Both
+`quiet_hours` keys are `null` when their respective window is disabled;
 `reminder.seconds_until_next` is `null` when the reminder is off and
 `0` when an alarm is firing.
 

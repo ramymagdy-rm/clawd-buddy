@@ -411,6 +411,21 @@ def _build_reminders_tab(notebook, state, root):
     quiet_start.bind("<<ComboboxSelected>>", on_quiet_change)
     quiet_end.bind("<<ComboboxSelected>>", on_quiet_change)
 
+    # ── Today's cup count (M4.1) ───────────────────────────────
+    # Always visible — the count is meaningful even when the reminder
+    # is disabled (you can still ack manually via the button below or
+    # the tray's "I drank water" entry). Recent-days line sits under
+    # the headline count; both refresh from the 1 Hz tick.
+    cups_var = tk.StringVar(value="")
+    cups_label = tk.Label(frame, textvariable=cups_var,
+                          font=("Segoe UI", 11, "bold"))
+    cups_label.pack(anchor="w", pady=(4, 0))
+
+    recent_var = tk.StringVar(value="")
+    recent_label = tk.Label(frame, textvariable=recent_var,
+                            font=("Segoe UI", 9), fg="#666")
+    recent_label.pack(anchor="w", pady=(0, 6))
+
     # ── Live status + Drank-now button ─────────────────────────
     status_var = tk.StringVar(value="")
     status_label = tk.Label(frame, textvariable=status_var,
@@ -419,6 +434,9 @@ def _build_reminders_tab(notebook, state, root):
 
     def on_drank():
         state.drink_acknowledged()
+        # Bump the display immediately so the user sees the count tick
+        # without waiting for the next 1 Hz refresh.
+        _refresh_history_display()
 
     drank_btn = ttk.Button(frame, text="I drank water now",
                            command=on_drank)
@@ -433,9 +451,22 @@ def _build_reminders_tab(notebook, state, root):
         sound_combo.configure(state=combo_st)
         quiet_start.configure(state=combo_st)
         quiet_end.configure(state=combo_st)
-        drank_btn.configure(state=st)
+        # Drank-now button stays enabled even when the reminder is off
+        # — the count is independent of the reminder firing.
+
+    def _refresh_history_display():
+        # Today line.
+        cups = state.cups_today
+        cups_var.set(f"{cups} cup{'s' if cups != 1 else ''} today")
+        # Recent line — most recent first, e.g. "Recent: 6 · 5 · 7 · 4".
+        if state.recent_days:
+            counts = " · ".join(str(e["count"]) for e in state.recent_days)
+            recent_var.set(f"Recent days: {counts}")
+        else:
+            recent_var.set("")
 
     def _tick_status():
+        _refresh_history_display()
         if not enabled_var.get():
             status_var.set("Reminder disabled")
         elif state.reminder_active:
