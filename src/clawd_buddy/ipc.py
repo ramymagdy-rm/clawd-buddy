@@ -192,6 +192,13 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
             "end": _format_hhmm(state.reminder_quiet_end),
         }
     secs_until = state.reminder_seconds_until_next()
+    # M4.1: drinking history. `cups_today` always reflects the latest
+    # known state (lazy day-rollover runs on every `update()`); the
+    # `today_date` field tells consumers which calendar day that
+    # count belongs to (matters when a `--status` call lands right
+    # after midnight before the next `update()` tick). `recent_days`
+    # is a defensive copy so a stale snapshot in a long-lived caller
+    # can't mutate the live list.
     reminder_block = {
         "enabled": bool(state.reminder_enabled),
         "interval_seconds": int(state.reminder_interval),
@@ -201,6 +208,9 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "active": bool(state.reminder_active),
         "seconds_until_next": (None if secs_until is None
                                else int(round(secs_until))),
+        "cups_today": int(state.cups_today),
+        "today_date": state.cups_today_date,
+        "recent_days": [dict(e) for e in state.recent_days],
     }
     return {
         "version": __version__,

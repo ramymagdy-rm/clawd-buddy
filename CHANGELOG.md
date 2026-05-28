@@ -4,6 +4,73 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.19] - 2026-05-25
+
+### Added — Milestone 4.1: drinking history
+
+- **Persistent cup counter.** Every `drink_acknowledged` path
+  (Space, tray **I drank water**, About-window "I drank water now"
+  button, `--drank` IPC) now increments `cups_today` and persists
+  the new snapshot. The count is independent of the reminder
+  firing — manual drinks count too.
+- **Cross-platform data directory.** History lives in
+  `~/.clawd-buddy/history.json` (`C:\Users\<name>\.clawd-buddy\`
+  on Windows, `~/.clawd-buddy/` on Linux). New
+  `clawd_buddy.history` module owns the path resolution,
+  validation, and atomic write — settings (`config.json`) stay in
+  the existing platform config dir; runtime data lives next to
+  the home directory where it's easy to back up / sync.
+- **Day rollover.** Crossing local midnight closes out the
+  in-progress day into a `recent_days` tail (newest first, capped
+  at 7 entries) and resets the count. Detected lazily on every
+  `update()` tick and on every `drink_acknowledged` so the
+  display is always correct without a real timer thread. Empty
+  days (zero acks) are skipped so an idle day doesn't pollute
+  the history list with a zero row.
+- **About → Reminders tab** now shows two new lines at the top:
+  a bold "**3 cups today**" headline (with singular/plural
+  handling) and a "Recent days: 6 · 5 · 7 · 4" tail. Both
+  refresh on the existing 1 Hz tick and update immediately when
+  you click the **I drank water now** button. The Drank-now
+  button is no longer gated on the reminder being enabled —
+  manual logging works either way.
+- **`--status` payload** gains three fields under `reminder`:
+  `cups_today` (int), `today_date` (the YYYY-MM-DD that count
+  belongs to, or `null` before the first ack), and
+  `recent_days` (list of `{date, count}`, newest first).
+
+### Changed
+
+- `BuddyState.__init__` accepts new keyword arguments
+  `cups_today`, `cups_today_date`, `recent_days`, and
+  `history_save_fn`. The first three are the seed values app.py
+  reads from `history.load_history()` on startup; the last is
+  the testing seam (parallel to `clock` and `now_min_fn`) that
+  production wires to `history.save_history`.
+- `BuddyState.drink_acknowledged()` calls
+  `_roll_history_day_if_needed()` before incrementing
+  `cups_today`, then hands the new snapshot to the persistence
+  layer. `BuddyState.update()` calls the same roll-check every
+  frame so a buddy that's been idle past midnight reports the
+  correct count without waiting for the next ack.
+- Persistence failures (corrupt mount, no write permission, etc.)
+  are non-fatal and log a single warning line — the in-memory
+  count survives, the file is just stale until the next ack
+  lands. Matches `config.save_config`'s "log and continue"
+  contract.
+
+### Documentation
+
+- `.ai/decisions/2026-05-25-milestone-4.1-drinking-history.md`
+  — design rationale covering the settings-vs-data split, why
+  we count acks (not slot fires), the lazy day-rollover model,
+  the YYYY-MM-DD on-disk format, and the `history_save_fn`
+  injection seam.
+- `README.md` — new **Drinking history** section under the M4
+  block; `--status` example shows the three new fields.
+- `.ai/feature-map.md` — three new M4.1 rows.
+- `.ai/roadmap.md` — M4.1 marked shipped.
+
 ## [0.1.18] - 2026-05-25
 
 ### Changed — Milestone 4.3: scheduled water reminders

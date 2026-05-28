@@ -109,6 +109,11 @@ DEFAULT_REMINDER_ANCHOR_MINUTE = 8 * 60
 # Short, ASCII-only (pygame's default font doesn't carry emoji).
 REMINDER_BUBBLE_TEXT = "Drink water!"
 
+# M4.1: cap on the "recent days" history we keep in memory + persist.
+# Lines up with `history.RECENT_DAYS_MAX` but duplicated here so
+# state.py doesn't pull `history` at module load (clean test surface).
+HISTORY_RECENT_DAYS_MAX = 7
+
 
 # Confetti palette — shared across all themes so a celebrate animation
 # is always rainbow-coloured regardless of which theme is active.
@@ -198,6 +203,25 @@ def _latest_slot_at_or_before(anchor_min, interval_min, now_min):
     return anchor_min + n * interval_min
 
 
+def _is_iso_date_str(s):
+    """True if `s` looks like a `YYYY-MM-DD` string with plausible
+    ranges. Used by the BuddyState constructor + drink_acknowledged
+    to reject garbage seeded from a corrupt history.json. Mirrors
+    `history._is_iso_date` but duplicated here so state.py doesn't
+    import history at module load time (clean test surface)."""
+    if not isinstance(s, str) or len(s) != 10:
+        return False
+    if s[4] != "-" or s[7] != "-":
+        return False
+    try:
+        y = int(s[0:4])
+        m = int(s[5:7])
+        d = int(s[8:10])
+    except ValueError:
+        return False
+    return 0 <= y <= 9999 and 1 <= m <= 12 and 1 <= d <= 31
+
+
 def _in_quiet_window(start, end, now_min):
     """Return True if `now_min` (minutes-from-midnight) falls inside
     the [start, end) window. Handles wraparound: when start > end
@@ -237,7 +261,9 @@ class BuddyState:
                  reminder_quiet_start=DEFAULT_REMINDER_QUIET_START,
                  reminder_quiet_end=DEFAULT_REMINDER_QUIET_END,
                  reminder_anchor_minute=DEFAULT_REMINDER_ANCHOR_MINUTE,
-                 now_min_fn=None):
+                 now_min_fn=None,
+                 cups_today=0, cups_today_date=None,
+                 recent_days=None, history_save_fn=None):
         # `clock` indirection so unit tests can advance time without
         # actually sleeping. Defaults to time.time at runtime.
         self._clock = clock if clock is not None else time.time
@@ -358,6 +384,36 @@ class BuddyState:
         # the unix clock).
         self._last_fired_slot_min = None
         self._last_fired_day_key = None
+
+        # M4.1: persistent drinking history. `cups_today` is the count
+        # of acknowledged drinks for the in-progress local calendar
+        # day (`cups_today_date` — YYYY-MM-DD); `recent_days` is the
+        # closed-out tail (newest first), trimmed to
+        # HISTORY_RECENT_DAYS_MAX.
+        #
+        # The cup count is independent of the reminder firing — every
+        # `drink_acknowledged` path (Space, tray, `--drank`, the
+        # About-window button) increments it, whether or not an alarm
+        # was active. Day rollover is detected lazily on the next
+        # `update()` tick or `drink_acknowledged` call.
+        #
+        # `history_save_fn` is the testing seam parallel to `clock` and
+        # `now_min_fn`: production wires in `history.save_history`;
+        # tests pass a stub that records calls without touching disk.
+        self.cups_today = int(cups_today) if isinstance(cups_today, int) and cups_today >= 0 else 0
+        self.cups_today_date = cups_today_date if _is_iso_date_str(cups_today_date) else None
+        self.recent_days = []
+        if isinstance(recent_days, list):
+            for entry in recent_days:
+                if (isinstance(entry, dict)
+                        and _is_iso_date_str(entry.get("date"))
+                        and isinstance(entry.get("count"), int)
+                        and not isinstance(entry.get("count"), bool)
+                        and entry["count"] >= 0):
+                    self.recent_days.append(
+                        {"date": entry["date"], "count": entry["count"]})
+            del self.recent_days[HISTORY_RECENT_DAYS_MAX:]
+        self._history_save_fn = history_save_fn
 
     # ── Sound ────────────────────────────────────────────────────
     @property
@@ -514,6 +570,16 @@ class BuddyState:
         lt = time.localtime(now)
         return (lt.tm_year, lt.tm_yday)
 
+    def _today_iso(self, now=None):
+        """Local-calendar `YYYY-MM-DD` for today. The history layer
+        uses this human-readable form for keys so a curious user
+        opening `~/.clawd-buddy/history.json` doesn't have to mentally
+        translate `(2026, 145)` into a real date."""
+        if now is None:
+            now = self._clock()
+        lt = time.localtime(now)
+        return f"{lt.tm_year:04d}-{lt.tm_mon:02d}-{lt.tm_mday:02d}"
+
     def is_reminder_quiet_now(self, now_min=None):
         """True iff the reminder's quiet-hours window is configured AND
         the current local time falls inside it. Mirrors `is_quiet_now`
@@ -559,16 +625,90 @@ class BuddyState:
         return (1440 - now_min + anchor) * 60
 
     def drink_acknowledged(self):
-        """User confirmed they drank — dismiss any active alarm.
+        """User confirmed they drank — dismiss any active alarm and
+        record the drink in the daily history.
 
         M4.3: this no longer shifts the schedule. The next reminder
         still fires at its scheduled wall-clock slot; drinking only
         clears the current alarm and refreshes `_last_drink_ts` for
         status reporting. Routed through here from Space, the tray
         "I drank water" entry, and the IPC `drank` action so external
-        integrations (smart bottle, etc.) ack identically."""
+        integrations (smart bottle, etc.) ack identically.
+
+        M4.1: every ack increments `cups_today` and persists the new
+        snapshot via `history_save_fn`. Day rollover (cross-midnight)
+        is detected lazily here and in `update()` — when the local
+        date doesn't match `cups_today_date`, the previous day's
+        count is pushed onto `recent_days` (newest first, trimmed)
+        and `cups_today` resets to 0 before the increment.
+        """
         self._dismiss_reminder()
         self._last_drink_ts = self._clock()
+        self._roll_history_day_if_needed()
+        self.cups_today += 1
+        self._persist_history()
+
+    def _roll_history_day_if_needed(self):
+        """Detect a calendar-day rollover and close out yesterday's
+        count into `recent_days`. Idempotent — safe to call from
+        `update()` every frame and from `drink_acknowledged`.
+
+        Three cases:
+
+          1. `cups_today_date` is None (first run, or seeded from a
+             corrupt history). Stamp today's date and return — no
+             close-out, no zero-cup row pushed.
+          2. `cups_today_date` matches today. Nothing to do.
+          3. Otherwise, push `{date, count}` onto `recent_days`
+             (only when count > 0 — empty days aren't interesting
+             enough to clutter the history), trim to the cap, and
+             reset the in-progress day.
+        """
+        today_iso = self._today_iso()
+        if self.cups_today_date is None:
+            self.cups_today_date = today_iso
+            return
+        if self.cups_today_date == today_iso:
+            return
+        if self.cups_today > 0:
+            self.recent_days.insert(0, {
+                "date": self.cups_today_date,
+                "count": self.cups_today,
+            })
+            del self.recent_days[HISTORY_RECENT_DAYS_MAX:]
+        self.cups_today = 0
+        self.cups_today_date = today_iso
+
+    def history_snapshot(self):
+        """Return the `(today_entry, recent_days_copy)` pair the
+        history layer persists. `today_entry` is `None` when no
+        drinks have happened yet today (avoids a zero-row pollution
+        of the file before the first ack)."""
+        if self.cups_today_date is None or self.cups_today == 0:
+            today_entry = None
+        else:
+            today_entry = {
+                "date": self.cups_today_date,
+                "count": self.cups_today,
+            }
+        # Defensive copy so a caller mutating the returned list can't
+        # silently corrupt the in-memory history.
+        return today_entry, [dict(e) for e in self.recent_days]
+
+    def _persist_history(self):
+        """Hand the current snapshot to the injected save function.
+        No-op when no save_fn is wired in (the test default and the
+        legacy `BuddyState()` constructor call path)."""
+        if self._history_save_fn is None:
+            return
+        today, recent = self.history_snapshot()
+        try:
+            self._history_save_fn(today, recent)
+        except Exception as e:
+            # Persistence failures are non-fatal — the in-memory
+            # counter survives, only the file is stale. Match the
+            # config layer's "log and continue" contract.
+            print(f"[buddy] Could not save drinking history: {e}")
 
     def _dismiss_reminder(self):
         """Clear the active alarm without changing the timer.
@@ -803,6 +943,14 @@ class BuddyState:
         # bool check + return); the work only happens for users who
         # opted in via the About-window Reminders tab.
         self._tick_reminder(now)
+
+        # M4.1: roll the history-day if the local clock crossed
+        # midnight since the last frame. Lazy detection so we don't
+        # need a real timer thread; the count is correct the next
+        # time the user looks at it. No save here — closing out a
+        # zero-cup day isn't worth a disk write; the next ack will
+        # persist if it lands on a new day.
+        self._roll_history_day_if_needed()
 
     # ── Internal: dispatch / queue ───────────────────────────────
     def _request(self, action, **kwargs):

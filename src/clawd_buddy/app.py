@@ -72,6 +72,7 @@ from .platform import (
     resize_window,
     setup_window,
 )
+from . import history
 from .state import BuddyState
 from .ui.about import make_buddy_icon_surface
 from .ui.drawing import draw_buddy
@@ -228,6 +229,13 @@ def main():
     saved_volume = load_saved_volume()
     saved_quiet_start, saved_quiet_end = load_saved_quiet_hours()
     saved_reminder_qs, saved_reminder_qe = load_saved_reminder_quiet_hours()
+    # M4.1: pre-seed the in-memory cup counter from ~/.clawd-buddy/
+    # history.json so the count survives restarts. `history.load_
+    # history()` degrades to `(None, [])` for any error so a missing
+    # / corrupt file never blocks startup.
+    saved_today, saved_recent = history.load_history()
+    cups_today_seed = saved_today["count"] if saved_today else 0
+    cups_today_date_seed = saved_today["date"] if saved_today else None
     state = BuddyState(
         theme_name=args.theme,
         sound_pack=load_saved_sound_pack(),
@@ -241,6 +249,11 @@ def main():
         reminder_quiet_start=saved_reminder_qs,
         reminder_quiet_end=saved_reminder_qe,
         reminder_anchor_minute=load_saved_reminder_anchor_minute(),
+        # M4.1 seed + persistence wiring.
+        cups_today=cups_today_seed,
+        cups_today_date=cups_today_date_seed,
+        recent_days=saved_recent,
+        history_save_fn=history.save_history,
     )
     state.topmost = topmost
 
