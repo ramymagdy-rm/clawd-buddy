@@ -115,6 +115,27 @@ REMINDER_BUBBLE_TEXT = "Drink water!"
 HISTORY_RECENT_DAYS_MAX = 7
 
 
+# M6: Pomodoro work/break cycle. Durations arrive in seconds (the CLI
+# parses "25/5" minutes and converts before sending). Bounds protect
+# against garbage from raw IPC payloads — a 1-second work phase would
+# turn the buddy into a strobe light.
+DEFAULT_POMODORO_WORK_S = 25 * 60
+DEFAULT_POMODORO_BREAK_S = 5 * 60
+POMODORO_MIN_S = 60            # 1 minute
+POMODORO_MAX_S = 180 * 60      # 3 hours
+
+# Bubble texts for the phase transitions. ASCII-only — pygame's default
+# font doesn't carry emoji (same constraint as REMINDER_BUBBLE_TEXT).
+POMODORO_BREAK_TEXT = "Break time!"
+POMODORO_WORK_TEXT = "Back to work!"
+
+# Safety valve for the catch-up loop in _tick_pomodoro. A laptop
+# resumed after a week of sleep should not spin through thousands of
+# phase flips; past this many transitions in one tick we stop the
+# cycle instead (the user clearly wasn't pomodoro-ing).
+POMODORO_MAX_CATCHUP = 48
+
+
 # Confetti palette — shared across all themes so a celebrate animation
 # is always rainbow-coloured regardless of which theme is active.
 CONFETTI_COLORS = [
@@ -201,6 +222,22 @@ def _latest_slot_at_or_before(anchor_min, interval_min, now_min):
         return None
     n = (now_min - anchor_min) // interval_min
     return anchor_min + n * interval_min
+
+
+def _normalize_pomodoro_seconds(value, default):
+    """Coerce a pomodoro phase duration (seconds) into
+    [POMODORO_MIN_S, POMODORO_MAX_S]. Anything non-numeric or out of
+    range falls back to `default` — raw IPC payloads are untrusted
+    input and must not produce a 1-second celebrate loop."""
+    if isinstance(value, bool):  # bool is an int subclass — reject
+        return default
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return default
+    if not (POMODORO_MIN_S <= value <= POMODORO_MAX_S):
+        return default
+    return value
 
 
 def _is_iso_date_str(s):
@@ -316,6 +353,24 @@ class BuddyState:
         # here so `--status` can report it without the IPC layer reaching
         # into windowing code.
         self.topmost = True
+
+        # M6: mirror of the HTTP webhook listener's port (None when the
+        # listener wasn't started). Written once by app.py at startup —
+        # same pattern as `topmost` — so `--status` can report the HTTP
+        # surface without the IPC layer knowing about the webhook module.
+        self.http_port = None
+
+        # M6: Pomodoro cycle. `pomodoro_phase` is "off" | "work" |
+        # "break"; `_pomodoro_phase_end` is the clock deadline of the
+        # current phase; `pomodoro_cycles` counts *completed* work
+        # phases since the cycle started. In-memory only — a pomodoro
+        # is a deliberate, session-scoped ritual; surviving a restart
+        # would be more surprising than helpful.
+        self.pomodoro_phase = "off"
+        self._pomodoro_phase_end = 0.0
+        self.pomodoro_work_s = DEFAULT_POMODORO_WORK_S
+        self.pomodoro_break_s = DEFAULT_POMODORO_BREAK_S
+        self.pomodoro_cycles = 0
 
         # M3: when wave/greet preempts thinking, remember to resume the
         # thinking animation after the cue clears (and any items behind
@@ -795,6 +850,82 @@ class BuddyState:
         self.bubble_text = REMINDER_BUBBLE_TEXT
         self._bubble_expiry = now + 365 * 24 * 3600
 
+    # ── M6: Pomodoro surface ─────────────────────────────────────
+    @property
+    def pomodoro_active(self):
+        return self.pomodoro_phase != "off"
+
+    def start_pomodoro(self, work_s=None, break_s=None):
+        """Start (or restart) a work/break cycle. Durations are seconds;
+        invalid / missing values fall back to the 25/5 defaults via
+        `_normalize_pomodoro_seconds`. Restarting an in-flight cycle
+        rebases it — the new work phase starts now, cycles reset.
+
+        The cycle repeats until `stop_pomodoro`, a `pomodoro_stop` IPC
+        action, or buddy exit (in-memory only, see __init__)."""
+        self.pomodoro_work_s = _normalize_pomodoro_seconds(
+            work_s, DEFAULT_POMODORO_WORK_S)
+        self.pomodoro_break_s = _normalize_pomodoro_seconds(
+            break_s, DEFAULT_POMODORO_BREAK_S)
+        self.pomodoro_phase = "work"
+        self._pomodoro_phase_end = self._clock() + self.pomodoro_work_s
+        self.pomodoro_cycles = 0
+        work_min = self.pomodoro_work_s // 60
+        break_min = self.pomodoro_break_s // 60
+        self.set_message(f"Pomodoro {work_min}/{break_min} started")
+
+    def stop_pomodoro(self):
+        """End the cycle. Clears any pomodoro bubble still showing but
+        leaves other bubbles (a `--message` ping, a reminder) alone."""
+        if not self.pomodoro_active:
+            return
+        self.pomodoro_phase = "off"
+        self._pomodoro_phase_end = 0.0
+        if self.bubble_text in (POMODORO_BREAK_TEXT, POMODORO_WORK_TEXT):
+            self.bubble_text = ""
+            self._bubble_expiry = 0.0
+
+    def pomodoro_seconds_remaining(self):
+        """Seconds until the current phase ends; `None` when no cycle
+        is running. Clamped at 0 so a late tick never reports a
+        negative countdown. Surfaced in `--status`."""
+        if not self.pomodoro_active:
+            return None
+        return max(0.0, self._pomodoro_phase_end - self._clock())
+
+    def _tick_pomodoro(self, now):
+        """Per-frame pomodoro check. Called from `update()`.
+
+        Phase boundaries are clock deadlines, so a late tick (laptop
+        suspend, busy frame) fires the missed transition immediately —
+        the same catch-up rule as the M4.3 reminder scheduler. The
+        while-loop walks through *every* boundary that passed; each
+        work→break flip celebrates (and counts a cycle), each
+        break→work flip waves. The reaction queue's existing cap keeps
+        a long catch-up from playing minutes of animations; past
+        POMODORO_MAX_CATCHUP transitions we stop the cycle outright —
+        a machine asleep for days wasn't pomodoro-ing.
+        """
+        if not self.pomodoro_active:
+            return
+        flips = 0
+        while self.pomodoro_active and now >= self._pomodoro_phase_end:
+            flips += 1
+            if flips > POMODORO_MAX_CATCHUP:
+                self.stop_pomodoro()
+                return
+            if self.pomodoro_phase == "work":
+                self.pomodoro_cycles += 1
+                self.pomodoro_phase = "break"
+                self._pomodoro_phase_end += self.pomodoro_break_s
+                self.trigger()  # celebrate — volume/quiet-hours apply
+                self.set_message(POMODORO_BREAK_TEXT)
+            else:
+                self.pomodoro_phase = "work"
+                self._pomodoro_phase_end += self.pomodoro_work_s
+                self.wave()  # attention cue back to work
+                self.set_message(POMODORO_WORK_TEXT)
+
     # ── Mode introspection (used by drawing and tests) ───────────
     @property
     def celebrating(self):
@@ -943,6 +1074,9 @@ class BuddyState:
         # bool check + return); the work only happens for users who
         # opted in via the About-window Reminders tab.
         self._tick_reminder(now)
+
+        # M6: tick the pomodoro cycle. Same cheap-when-off contract.
+        self._tick_pomodoro(now)
 
         # M4.1: roll the history-day if the local clock crossed
         # midnight since the last frame. Lazy detection so we don't

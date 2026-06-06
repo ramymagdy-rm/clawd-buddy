@@ -24,6 +24,12 @@ Options:
   --quit           Ask the running buddy to exit cleanly and exit
   --theme THEME    Color theme — one of: dark, light, dracula, monokai,
                    nord, gruvbox, solarized, sunset (default: dark)
+  --pomodoro W/B   Start a pomodoro cycle on the running buddy (minutes,
+                   e.g. 25/5 — celebrates at break, waves back to work)
+  --pomodoro-stop  End the running buddy's pomodoro cycle
+  --http-port N    Also accept signals over HTTP on localhost:N
+                   (POST /signal, GET /status — mirrors the TCP protocol)
+  --http-token T   Require a Bearer token on every HTTP request
   --help           Show this help and exit
 
 Controls:
@@ -59,6 +65,7 @@ from .config import (
 )
 from .constants import FPS, SOCK_PORT, WIN_H, WIN_W
 from .ipc import request_status, send_signal, socket_listener
+from .webhook import webhook_listener
 from .platform import (
     auto_detach,
     disable_startup,
@@ -125,10 +132,12 @@ def main():
         print(json.dumps(info, indent=2))
         sys.exit(0)
 
-    # --send / --wave / --top / --quit / --prompt-start / --message / --drank
+    # --send / --wave / --top / --quit / --prompt-start / --message /
+    # --drank / --pomodoro / --pomodoro-stop
     # (any of these signals a running instance and exits)
     if (args.send is not None or args.wave or args.top or args.quit
-            or args.prompt_start or args.message is not None or args.drank):
+            or args.prompt_start or args.message is not None or args.drank
+            or args.pomodoro is not None or args.pomodoro_stop):
         payload_obj = {}
         if args.quit:
             payload_obj["action"] = "quit"
@@ -139,6 +148,17 @@ def main():
         elif args.drank:
             # M4: external acknowledgment for the water-reminder.
             payload_obj["action"] = "drank"
+        elif args.pomodoro_stop:
+            # M6: end the running pomodoro cycle.
+            payload_obj["action"] = "pomodoro_stop"
+        elif args.pomodoro is not None:
+            # M6: start a work/break cycle. The CLI validated the
+            # minutes; the wire format is seconds (the state layer's
+            # native unit).
+            work_min, break_min = args.pomodoro
+            payload_obj["action"] = "pomodoro_start"
+            payload_obj["work_seconds"] = work_min * 60
+            payload_obj["break_seconds"] = break_min * 60
         elif args.message is not None:
             payload_obj["action"] = "message"
             payload_obj["text"] = args.message
@@ -179,6 +199,12 @@ def main():
                 cmd.append("--no-topmost")
             if args.test:
                 cmd.append("--test")
+            # M6: the webhook listener lives in the detached process —
+            # forward its flags or `--http-port` would silently vanish.
+            if args.http_port is not None:
+                cmd += ["--http-port", str(args.http_port)]
+            if args.http_token is not None:
+                cmd += ["--http-token", args.http_token]
             subprocess.Popen(
                 cmd,
                 creationflags=(subprocess.DETACHED_PROCESS
@@ -277,6 +303,18 @@ def main():
                      daemon=True).start()
     threading.Thread(target=create_tray, args=(state,),
                      daemon=True).start()
+    # M6: optional HTTP webhook listener — a thin transport over the
+    # same dispatch path as the TCP listener above. The `http_port`
+    # mirror lets `--status` report the HTTP surface (same pattern as
+    # `state.topmost`).
+    if args.http_port is not None:
+        state.http_port = args.http_port
+        threading.Thread(
+            target=webhook_listener,
+            args=(state, args.http_port),
+            kwargs={"token": args.http_token, "tcp_port": port},
+            daemon=True,
+        ).start()
 
     # Drag state
     dragging = False

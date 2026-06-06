@@ -57,6 +57,8 @@ ACTION_THINKING_END = "thinking_end"
 ACTION_MESSAGE = "message"
 ACTION_STATUS = "status"
 ACTION_DRANK = "drank"   # M4: water-reminder acknowledgment
+ACTION_POMODORO_START = "pomodoro_start"   # M6: start work/break cycle
+ACTION_POMODORO_STOP = "pomodoro_stop"     # M6: end the cycle
 
 KNOWN_ACTIONS = frozenset({
     ACTION_CELEBRATE,
@@ -70,6 +72,8 @@ KNOWN_ACTIONS = frozenset({
     ACTION_MESSAGE,
     ACTION_STATUS,
     ACTION_DRANK,
+    ACTION_POMODORO_START,
+    ACTION_POMODORO_STOP,
 })
 
 
@@ -136,6 +140,14 @@ def dispatch_action(state, action, payload=None):
         pass
     elif action == ACTION_DRANK:
         state.drink_acknowledged()
+    elif action == ACTION_POMODORO_START:
+        # M6: durations are seconds; missing/garbage values fall back
+        # to the 25/5 defaults inside start_pomodoro's validator.
+        state.start_pomodoro(
+            work_s=payload.get("work_seconds"),
+            break_s=payload.get("break_seconds"))
+    elif action == ACTION_POMODORO_STOP:
+        state.stop_pomodoro()
     else:
         # Defensive default: any unrecognised action celebrates. This
         # preserves backward-compat with older buddy clients that sent
@@ -212,6 +224,27 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "today_date": state.cups_today_date,
         "recent_days": [dict(e) for e in state.recent_days],
     }
+    # M6: pomodoro block. `remaining_seconds` is None when no cycle is
+    # running (mirrors the reminder's seconds_until_next contract);
+    # whole seconds — sub-second precision is noise for a minutes-
+    # granular feature.
+    pomo_remaining = state.pomodoro_seconds_remaining()
+    pomodoro_block = {
+        "active": bool(state.pomodoro_active),
+        "phase": state.pomodoro_phase,
+        "remaining_seconds": (None if pomo_remaining is None
+                              else int(round(pomo_remaining))),
+        "cycles": int(state.pomodoro_cycles),
+        "work_seconds": int(state.pomodoro_work_s),
+        "break_seconds": int(state.pomodoro_break_s),
+    }
+    # M6: HTTP webhook surface. `state.http_port` is the mirror app.py
+    # writes at startup (same pattern as `topmost`); None ⇒ listener
+    # not running.
+    http_block = {
+        "enabled": state.http_port is not None,
+        "port": state.http_port,
+    }
     return {
         "version": __version__,
         "pid": os.getpid(),
@@ -230,6 +263,8 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "volume": round(float(state.volume), 3),
         "quiet_hours": quiet_block,
         "reminder": reminder_block,
+        "pomodoro": pomodoro_block,
+        "http": http_block,
     }
 
 

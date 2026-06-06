@@ -40,6 +40,11 @@ class TestDefaults:
         assert args.status is False
         # M4 additions.
         assert args.drank is False
+        # M6 additions.
+        assert args.pomodoro is None
+        assert args.pomodoro_stop is False
+        assert args.http_port is None
+        assert args.http_token is None
 
 
 # ── Individual flag parsing ──────────────────────────────────────────
@@ -113,6 +118,63 @@ class TestFlags:
         # water-drinking reminder.
         assert cli.parse_args(["--drank"]).drank is True
 
+    # ── M6: pomodoro + webhook flags ─────────────────────────────────
+    def test_pomodoro_parses_to_minute_tuple(self):
+        args = cli.parse_args(["--pomodoro", "25/5"])
+        assert args.pomodoro == (25, 5)
+
+    def test_pomodoro_accepts_boundaries(self):
+        assert cli.parse_args(["--pomodoro", "1/1"]).pomodoro == (1, 1)
+        assert cli.parse_args(["--pomodoro", "180/180"]).pomodoro == (180, 180)
+
+    def test_pomodoro_rejects_bad_specs(self):
+        # argparse exits 2 on a type-validator failure.
+        for bad in ("25", "25/5/3", "abc/5", "25/", "0/5", "181/5",
+                    "25/0", "-25/5"):
+            with pytest.raises(SystemExit):
+                cli.parse_args(["--pomodoro", bad])
+
+    def test_pomodoro_stop_flag(self):
+        assert cli.parse_args(["--pomodoro-stop"]).pomodoro_stop is True
+
+    def test_http_port_parses_as_int(self):
+        args = cli.parse_args(["--http-port", "8787"])
+        assert args.http_port == 8787
+        assert isinstance(args.http_port, int)
+
+    def test_http_token(self):
+        args = cli.parse_args(["--http-token", "s3cret"])
+        assert args.http_token == "s3cret"
+
+
+class TestParsePomodoroSpec:
+    """Direct coverage of the type-validator — argparse wraps its
+    ArgumentTypeError, so the message text is only checkable here."""
+
+    def test_valid(self):
+        assert cli.parse_pomodoro_spec("25/5") == (25, 5)
+        assert cli.parse_pomodoro_spec("50/10") == (50, 10)
+
+    def test_not_a_pair(self):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.parse_pomodoro_spec("25")
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.parse_pomodoro_spec("25/5/2")
+
+    def test_non_numeric(self):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.parse_pomodoro_spec("work/break")
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.parse_pomodoro_spec("25.5/5")
+
+    def test_out_of_range(self):
+        import argparse
+        for bad in ("0/5", "181/5", "25/0", "25/181"):
+            with pytest.raises(argparse.ArgumentTypeError):
+                cli.parse_pomodoro_spec(bad)
+
 
 # ── --version short-circuits with exit code 0 ────────────────────────
 class TestVersion:
@@ -142,6 +204,15 @@ class TestHelpText:
         out = capsys.readouterr().out
         assert "--message" in out
         assert "--status" in out
+
+    def test_help_lists_M6_flags(self, capsys):
+        with pytest.raises(SystemExit):
+            cli.parse_args(["--help"])
+        out = capsys.readouterr().out
+        assert "--pomodoro" in out
+        assert "--pomodoro-stop" in out
+        assert "--http-port" in out
+        assert "--http-token" in out
 
 
 # ── read_hook_stdin behaviours ───────────────────────────────────────

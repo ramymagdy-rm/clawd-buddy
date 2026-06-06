@@ -165,6 +165,7 @@ class TestDispatch:
             "celebrate", "wave", "raise", "quit",
             "prompt_start", "greet", "thinking_start", "thinking_end",
             "message", "status", "drank",
+            "pomodoro_start", "pomodoro_stop",
         }
 
     def test_message_sets_bubble_text(self, state):
@@ -408,6 +409,84 @@ class TestStatusReminderBlock:
         state.set_reminder_enabled(True)
         resp = ipc.build_status_response(state)
         json.dumps(resp)
+
+
+# ── Pomodoro actions + status blocks (M6) ────────────────────────────
+class TestPomodoroActions:
+    def test_pomodoro_start_enters_work(self, state):
+        ipc.dispatch_action(state, "pomodoro_start",
+                            {"work_seconds": 1500, "break_seconds": 300})
+        assert state.pomodoro_phase == "work"
+        assert state.pomodoro_work_s == 1500
+        assert state.pomodoro_break_s == 300
+
+    def test_pomodoro_start_without_payload_uses_defaults(self, state):
+        ipc.dispatch_action(state, "pomodoro_start")
+        assert state.pomodoro_phase == "work"
+        assert state.pomodoro_work_s == 25 * 60
+        assert state.pomodoro_break_s == 5 * 60
+
+    def test_pomodoro_start_garbage_payload_uses_defaults(self, state):
+        # Raw IPC payloads are untrusted — a 1-second work phase must
+        # not slip through.
+        ipc.dispatch_action(state, "pomodoro_start",
+                            {"work_seconds": 1, "break_seconds": "x"})
+        assert state.pomodoro_work_s == 25 * 60
+        assert state.pomodoro_break_s == 5 * 60
+
+    def test_pomodoro_stop_ends_cycle(self, state):
+        ipc.dispatch_action(state, "pomodoro_start")
+        ipc.dispatch_action(state, "pomodoro_stop")
+        assert state.pomodoro_phase == "off"
+
+    def test_pomodoro_actions_are_known(self, state):
+        assert ipc.dispatch_action(state, "pomodoro_start") is True
+        assert ipc.dispatch_action(state, "pomodoro_stop") is True
+
+    def test_pomodoro_records_last_action(self, state):
+        ipc.dispatch_action(state, "pomodoro_start")
+        assert state.last_action == "pomodoro_start"
+
+
+class TestStatusPomodoroBlock:
+    def test_pomodoro_block_shape(self, state):
+        block = ipc.build_status_response(state)["pomodoro"]
+        for key in ("active", "phase", "remaining_seconds", "cycles",
+                    "work_seconds", "break_seconds"):
+            assert key in block
+
+    def test_pomodoro_block_off_defaults(self, state):
+        block = ipc.build_status_response(state)["pomodoro"]
+        assert block["active"] is False
+        assert block["phase"] == "off"
+        assert block["remaining_seconds"] is None
+        assert block["cycles"] == 0
+        assert block["work_seconds"] == 25 * 60
+        assert block["break_seconds"] == 5 * 60
+
+    def test_pomodoro_block_when_running(self, state, clock):
+        state.start_pomodoro(1500, 300)
+        clock.advance(600)
+        block = ipc.build_status_response(state)["pomodoro"]
+        assert block["active"] is True
+        assert block["phase"] == "work"
+        assert block["remaining_seconds"] == 900
+
+    def test_status_with_pomodoro_is_json_serialisable(self, state):
+        state.start_pomodoro()
+        json.dumps(ipc.build_status_response(state))
+
+
+class TestStatusHttpBlock:
+    def test_http_block_disabled_by_default(self, state):
+        block = ipc.build_status_response(state)["http"]
+        assert block == {"enabled": False, "port": None}
+
+    def test_http_block_reflects_mirror(self, state):
+        # app.py writes the mirror at startup; status reports it.
+        state.http_port = 8787
+        block = ipc.build_status_response(state)["http"]
+        assert block == {"enabled": True, "port": 8787}
 
 
 # ── send_signal client ───────────────────────────────────────────────

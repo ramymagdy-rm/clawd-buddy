@@ -4,6 +4,59 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.20] - 2026-06-06
+
+### Added — Milestone 6: driven by anything
+
+- **HTTP webhook listener.** `clawd-buddy --http-port 8787` makes the
+  running buddy also accept signals over HTTP on localhost:
+  `POST /signal` takes the same JSON payloads as the TCP protocol
+  (`{"action": "wave"}`, `{"action": "message", "text": "ci green"}`,
+  …) and `GET /status` returns the same snapshot as `--status`. The
+  webhook is a pure transport over the existing dispatch path, so
+  every current and future action works over HTTP automatically —
+  GitHub Actions, n8n, IFTTT, or a plain curl can now drive the buddy.
+  - Opt-in only (no flag ⇒ no listener) and binds `127.0.0.1`
+    exclusively — this is a localhost convenience surface, not an
+    internet-facing API.
+  - Optional `--http-token TOKEN` requires
+    `Authorization: Bearer TOKEN` on every request.
+  - The `quit` action is rejected over HTTP (403) unless a token is
+    configured — no unauthenticated curl-able kill switch.
+  - Request bodies are capped at 64 KB and always drained before
+    responding (a Windows client would otherwise see the connection
+    abort instead of the error status).
+- **Pomodoro mode.** `clawd-buddy --pomodoro 25/5` starts a work/break
+  cycle on the running buddy (minutes, 1–180 each). The buddy
+  celebrates when a break starts ("Break time!" bubble) and waves when
+  it's time to get back to work ("Back to work!"), repeating until
+  `clawd-buddy --pomodoro-stop`, the tray's **Stop Pomodoro** entry
+  (visible only while a cycle runs), or buddy exit.
+  - Transitions ride the normal celebrate/wave channels, so volume,
+    quiet hours, and reduce-motion apply with no special cases.
+  - Wall-clock deadlines with M4.3-style catch-up: a tick arriving
+    late (laptop suspend) fires the missed transition immediately and
+    the next phase still ends on the originally scheduled boundary.
+    A machine asleep through 48+ transitions stops the cycle instead
+    of replaying it.
+  - In-memory only — a pomodoro is a session-scoped ritual and does
+    not survive a buddy restart.
+- **`--status` payload** gains two blocks: `pomodoro` (`active`,
+  `phase`, `remaining_seconds`, `cycles`, `work_seconds`,
+  `break_seconds`) and `http` (`enabled`, `port`).
+- **New IPC actions** `pomodoro_start` (optional `work_seconds` /
+  `break_seconds`, validated, 25/5 defaults) and `pomodoro_stop` —
+  available over both TCP and the new HTTP transport.
+
+### Changed
+
+- The Windows detached-process respawn forwards `--http-port` /
+  `--http-token`, so the webhook works on default (non-`--fg`)
+  launches.
+- Durations arriving over IPC are re-validated in the state layer
+  (60 s–3 h bounds, garbage falls back to 25/5) — raw payloads are
+  untrusted input.
+
 ## [0.1.19] - 2026-05-25
 
 ### Added — Milestone 4.1: drinking history
