@@ -142,6 +142,54 @@ The counter is independent of whether the reminder is enabled — manual
 logging works either way, so you can use the buddy as a pure water-
 tracker without the nag.
 
+### Pomodoro mode
+
+```bash
+clawd-buddy --pomodoro 25/5    # 25 min work / 5 min break, repeating
+clawd-buddy --pomodoro-stop    # end the cycle
+```
+
+The buddy runs the cycle so you don't have to watch a timer:
+
+- **Break starts** → celebrate animation + **"Break time!"** bubble
+- **Break ends** → wave animation + **"Back to work!"** bubble
+- Repeats until you stop it (CLI, the tray's **Stop Pomodoro** entry —
+  visible only while a cycle runs — or quitting the buddy)
+
+Transitions ride the normal celebrate/wave channels, so your volume,
+quiet hours, and reduce-motion settings all apply. Phase boundaries
+are wall-clock deadlines: if the machine was asleep at the boundary,
+the transition fires as soon as the buddy notices, and the next phase
+still ends at its originally scheduled time. Work/break lengths accept
+1–180 minutes each. The cycle is in-memory only — it does not survive
+a buddy restart. Check progress any time via `--status` (the
+`pomodoro` block shows phase, remaining seconds, and completed
+cycles).
+
+### HTTP webhook — drive the buddy from anything
+
+```bash
+clawd-buddy --http-port 8787              # start with the webhook enabled
+curl -X POST localhost:8787/signal -d '{"action": "wave"}'
+curl -X POST localhost:8787/signal -d '{"action": "message", "text": "CI green"}'
+curl localhost:8787/status                # same JSON as --status
+```
+
+`POST /signal` accepts exactly the same JSON payloads as the TCP
+protocol — the webhook is a thin transport over the same dispatcher,
+so **every** action (celebrate, wave, message, pomodoro, …) works over
+HTTP automatically. GitHub Actions, n8n, IFTTT webhooks, or a two-line
+script can now make the buddy react.
+
+Security posture:
+
+- **Opt-in** — no `--http-port`, no listener.
+- **Localhost only** — binds `127.0.0.1`, always.
+- `--http-token TOKEN` (optional) requires
+  `Authorization: Bearer TOKEN` on every request.
+- The `quit` action is rejected over HTTP (403) unless a token is
+  configured — no unauthenticated curl-able kill switch.
+
 ### Themes
 
 Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
@@ -321,6 +369,17 @@ clawd-buddy --status         Print the running buddy's state as JSON
 clawd-buddy --drank          Acknowledge the water-drinking reminder
                              (clears any active alarm + resets the
                              timer). Exit 1 if no buddy is listening.
+clawd-buddy --pomodoro W/B   Start a pomodoro cycle on the running buddy.
+                             W/B are minutes (1-180 each), e.g. 25/5.
+                             Celebrates at break, waves back to work,
+                             repeats until stopped.
+clawd-buddy --pomodoro-stop  End the running buddy's pomodoro cycle.
+clawd-buddy --http-port N    (launch flag) Also accept signals over HTTP
+                             on 127.0.0.1:N — POST /signal mirrors the
+                             TCP protocol, GET /status mirrors --status.
+clawd-buddy --http-token T   (launch flag) Require "Authorization:
+                             Bearer T" on every HTTP request. Without a
+                             token, the HTTP quit action is rejected.
 clawd-buddy --prompt-start   Signal start of a Claude Code prompt — greets
                              on the first prompt of a new session, then
                              enters the thinking animation. Reads
@@ -383,7 +442,9 @@ src/clawd_buddy/
 ├── state.py        # BuddyState — animation state machine + queue
 ├── cli.py          # argparse setup + Claude Code hook stdin reader
 ├── config.py       # ~/.config/clawd-buddy persistence
+├── history.py      # ~/.clawd-buddy/history.json drinking-history store
 ├── ipc.py          # JSON-over-TCP protocol + dispatcher + client
+├── webhook.py      # HTTP transport over the same dispatcher (--http-port)
 ├── ui/
 │   ├── themes.py   # 8 color theme registry
 │   ├── sound.py    # procedural PCM sound-pack generators
@@ -425,7 +486,7 @@ buddy writes a JSON snapshot back on the same socket before closing:
 ```bash
 $ clawd-buddy --status
 {
-  "version": "0.1.19",
+  "version": "0.1.20",
   "pid": 12345,
   "port": 44556,
   "mode": "idle",
@@ -454,6 +515,18 @@ $ clawd-buddy --status
       {"date": "2026-05-24", "count": 6},
       {"date": "2026-05-23", "count": 5}
     ]
+  },
+  "pomodoro": {
+    "active": true,
+    "phase": "work",
+    "remaining_seconds": 912,
+    "cycles": 2,
+    "work_seconds": 1500,
+    "break_seconds": 300
+  },
+  "http": {
+    "enabled": true,
+    "port": 8787
   }
 }
 ```
@@ -461,10 +534,12 @@ $ clawd-buddy --status
 `reduce_motion`, `volume`, and `quiet_hours` were added in v0.1.15;
 the `reminder` block was added in v0.1.16; `reminder.anchor` (the daily
 schedule start time) was added in v0.1.18; `cups_today`, `today_date`,
-and `recent_days` (the M4.1 drinking history) in v0.1.19. Both
-`quiet_hours` keys are `null` when their respective window is disabled;
+and `recent_days` (the M4.1 drinking history) in v0.1.19; the
+`pomodoro` and `http` blocks in v0.1.20. Both `quiet_hours` keys are
+`null` when their respective window is disabled;
 `reminder.seconds_until_next` is `null` when the reminder is off and
-`0` when an alarm is firing.
+`0` when an alarm is firing; `pomodoro.remaining_seconds` is `null`
+when no cycle is running.
 
 This is the recommended "is the buddy alive?" probe — exit code 1 plus
 a stderr message when no buddy is listening, exit code 0 with JSON on
@@ -484,6 +559,13 @@ s.close()
 echo '{"action": "wave"}' | nc localhost 44556
 ```
 
+Or, with the HTTP webhook enabled (`--http-port 8787`), from anything
+that can speak HTTP — no socket code required:
+
+```bash
+curl -X POST localhost:8787/signal -d '{"action": "celebrate"}'
+```
+
 ### Single instance
 
 Only one buddy can run at a time. If you launch `clawd-buddy` while one is already running, it sends a signal to the existing instance and exits.
@@ -501,6 +583,7 @@ The buddy adds a system tray icon with a right-click menu:
 - **Reduce Motion** — accessibility toggle. When checked, the buddy stops bobbing, swinging limbs, and spawning confetti; the colored attention border and sounds remain.
 - **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, quiet hours) lives in **About… → Reminders**.
 - **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss the current alarm. The next scheduled slot still fires on time.
+- **Stop Pomodoro** — *appears only while a pomodoro cycle is running*. Ends the cycle (same as `clawd-buddy --pomodoro-stop`).
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
 - **About…** — open a tabbed dialog: **About** (version / repo / author) and **Reminders** (edit interval, sound, and quiet hours; live countdown; "Drank now" button).
 - **Quit** — close the buddy

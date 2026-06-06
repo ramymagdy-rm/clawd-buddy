@@ -1362,3 +1362,202 @@ class TestSoundIntegration:
         s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock)
         s.start_thinking()
         assert s._pending_sound is None
+
+
+# ── M6: Pomodoro cycle ───────────────────────────────────────────────
+class TestPomodoroDefaults:
+    def test_starts_off(self, state):
+        assert state.pomodoro_phase == "off"
+        assert state.pomodoro_active is False
+        assert state.pomodoro_cycles == 0
+        assert state.pomodoro_seconds_remaining() is None
+
+    def test_http_port_mirror_defaults_none(self, state):
+        # M6: app.py writes this mirror; fresh state reports no listener.
+        assert state.http_port is None
+
+
+class TestPomodoroStart:
+    def test_start_enters_work_phase(self, state):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        assert state.pomodoro_phase == "work"
+        assert state.pomodoro_active is True
+        assert state.pomodoro_work_s == 25 * 60
+        assert state.pomodoro_break_s == 5 * 60
+
+    def test_start_shows_confirmation_bubble(self, state):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        assert state.bubble_text == "Pomodoro 25/5 started"
+
+    def test_start_defaults_when_no_args(self, state):
+        state.start_pomodoro()
+        assert state.pomodoro_work_s == 25 * 60
+        assert state.pomodoro_break_s == 5 * 60
+
+    def test_start_rejects_garbage_durations(self, state):
+        state.start_pomodoro("soon", None)
+        assert state.pomodoro_work_s == 25 * 60
+        assert state.pomodoro_break_s == 5 * 60
+
+    def test_start_rejects_out_of_range(self, state):
+        state.start_pomodoro(1, 999 * 3600)  # 1s work, 999h break
+        assert state.pomodoro_work_s == 25 * 60
+        assert state.pomodoro_break_s == 5 * 60
+
+    def test_start_rejects_bool(self, state):
+        # bool is an int subclass — must not slip through as 1 second.
+        state.start_pomodoro(True, True)
+        assert state.pomodoro_work_s == 25 * 60
+        assert state.pomodoro_break_s == 5 * 60
+
+    def test_restart_rebases_cycle(self, state, clock):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(25 * 60 + 1)
+        state.update()  # work -> break, cycles = 1
+        assert state.pomodoro_cycles == 1
+        state.start_pomodoro(50 * 60, 10 * 60)
+        assert state.pomodoro_phase == "work"
+        assert state.pomodoro_cycles == 0
+        assert state.pomodoro_work_s == 50 * 60
+
+    def test_remaining_counts_down(self, state, clock):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(10 * 60)
+        assert state.pomodoro_seconds_remaining() == 15 * 60
+
+
+class TestPomodoroStop:
+    def test_stop_resets_phase(self, state):
+        state.start_pomodoro()
+        state.stop_pomodoro()
+        assert state.pomodoro_phase == "off"
+        assert state.pomodoro_seconds_remaining() is None
+
+    def test_stop_when_off_is_noop(self, state):
+        state.stop_pomodoro()  # must not raise
+        assert state.pomodoro_phase == "off"
+
+    def test_stop_clears_pomodoro_bubble(self, state, clock):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(25 * 60 + 1)
+        state.update()
+        assert state.bubble_text == buddy_state.POMODORO_BREAK_TEXT
+        state.stop_pomodoro()
+        assert state.bubble_text == ""
+
+    def test_stop_leaves_foreign_bubble_alone(self, state):
+        state.start_pomodoro()
+        state.set_message("deploy green")
+        state.stop_pomodoro()
+        assert state.bubble_text == "deploy green"
+
+
+class TestPomodoroTick:
+    def test_work_to_break_celebrates(self, state, clock):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(25 * 60 + 1)
+        state.update()
+        assert state.pomodoro_phase == "break"
+        assert state.pomodoro_cycles == 1
+        assert state.celebrating
+        assert state.bubble_text == buddy_state.POMODORO_BREAK_TEXT
+
+    def test_break_to_work_waves(self, state, clock):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(25 * 60 + 1)
+        state.update()  # -> break (celebrating)
+        clock.advance(5 * 60)
+        state.update()  # -> work
+        assert state.pomodoro_phase == "work"
+        assert state.bubble_text == buddy_state.POMODORO_WORK_TEXT
+
+    def test_cycle_repeats_until_stopped(self, state, clock):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        for expected_cycles in (1, 2, 3):
+            clock.advance(25 * 60 + 1)
+            state.update()
+            assert state.pomodoro_phase == "break"
+            clock.advance(5 * 60)
+            state.update()
+            assert state.pomodoro_phase == "work"
+            assert state.pomodoro_cycles == expected_cycles
+
+    def test_no_transition_before_deadline(self, state, clock):
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(24 * 60)
+        state.update()
+        assert state.pomodoro_phase == "work"
+        assert state.pomodoro_cycles == 0
+
+    def test_late_tick_fires_missed_transition(self, state, clock):
+        # Same catch-up rule as the M4.3 reminder: a tick landing well
+        # past the deadline fires the transition immediately.
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(27 * 60)  # 2 min late
+        state.update()
+        assert state.pomodoro_phase == "break"
+        # Deadline advanced from the *scheduled* boundary, not from the
+        # late tick — the break still ends 5 min after the work phase
+        # was supposed to end.
+        assert state.pomodoro_seconds_remaining() == 3 * 60
+
+    def test_very_late_tick_walks_multiple_boundaries(self, state, clock):
+        # Suspend through a full work+break: tick lands in the *next*
+        # work phase with both transitions accounted for.
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(31 * 60)  # past work (25) + break (5)
+        state.update()
+        assert state.pomodoro_phase == "work"
+        assert state.pomodoro_cycles == 1
+
+    def test_absurdly_late_tick_stops_cycle(self, state, clock):
+        # Past POMODORO_MAX_CATCHUP transitions the cycle shuts off —
+        # a machine asleep for days was not pomodoro-ing.
+        state.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(7 * 24 * 3600)  # a week
+        state.update()
+        assert state.pomodoro_phase == "off"
+
+    def test_tick_when_off_is_cheap_noop(self, state, clock):
+        clock.advance(3600)
+        state.update()  # must not raise / change anything
+        assert state.pomodoro_phase == "off"
+
+    def test_transition_emits_sound_via_normal_channel(self, clock):
+        # With a real pack the work->break celebrate queues a sound —
+        # volume / quiet-hours apply because it is the normal channel.
+        s = buddy_state.BuddyState(sound_pack="fanfare", clock=clock)
+        s.start_pomodoro(25 * 60, 5 * 60)
+        clock.advance(25 * 60 + 1)
+        s.update()
+        assert s._pending_sound == "celebrate"
+
+
+class TestNormalizePomodoroSeconds:
+    def test_valid_passthrough(self):
+        f = buddy_state._normalize_pomodoro_seconds
+        assert f(25 * 60, 1) == 25 * 60
+        assert f(60, 1) == 60          # min boundary
+        assert f(180 * 60, 1) == 180 * 60  # max boundary
+
+    def test_out_of_range_falls_back(self):
+        f = buddy_state._normalize_pomodoro_seconds
+        assert f(59, 42) == 42
+        assert f(180 * 60 + 1, 42) == 42
+        assert f(-5, 42) == 42
+
+    def test_garbage_falls_back(self):
+        f = buddy_state._normalize_pomodoro_seconds
+        assert f(None, 42) == 42
+        # Numeric strings coerce via int() (consistent with the
+        # reminder-interval validator) but "25" = 25 s is below the
+        # 60 s floor, so it still falls back.
+        assert f("25", 42) == 42
+        assert f("nonsense", 42) == 42
+        assert f({}, 42) == 42
+        assert f(float("nan"), 42) == 42
+
+    def test_bool_falls_back(self):
+        f = buddy_state._normalize_pomodoro_seconds
+        assert f(True, 42) == 42
+        assert f(False, 42) == 42
