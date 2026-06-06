@@ -13,6 +13,7 @@ import math
 import pygame
 
 from ..constants import CHAR_H, CHAR_W, WIN_H, WIN_W
+from ..state import workspace_badge_color
 
 
 # Lazy-initialised font for the speech bubble. We can't build it at
@@ -140,6 +141,33 @@ def draw_speech_bubble(surf, text, cx, head_top_y, theme):
         lx = bx + pad_x + (line_w - line_surf.get_width()) // 2
         ly = by + pad_y + i * line_h
         surf.blit(line_surf, (lx, ly))
+
+
+def draw_workspace_badge(surf, letter, color, cx, head_top_y, theme):
+    """Draw the M7 workspace badge — a small rounded square carrying
+    the workspace's first letter, anchored above the buddy's left
+    shoulder (the wave bang owns the right side and the thinking dots
+    own the centre, so the left corner is the only stable real estate).
+
+    `color` is the workspace's stable tint (see
+    `state.workspace_badge_color`); the letter renders white, which
+    every palette entry was picked to support. No-op without a letter
+    so callers can gate on `state.workspace_badge_visible()` alone.
+    """
+    if not letter:
+        return
+    size = 16
+    bx = cx - CHAR_W // 2 - 4
+    by = head_top_y - size - 6
+    rounded_rect(surf, color, (bx, by, size, size), 5)
+    pygame.draw.rect(
+        surf, theme["body_outer"], (bx, by, size, size),
+        width=1, border_radius=5,
+    )
+    font = _bubble_font()
+    glyph = font.render(letter, True, (255, 255, 255))
+    surf.blit(glyph, (bx + (size - glyph.get_width()) // 2,
+                      by + (size - glyph.get_height()) // 2))
 
 
 def rounded_rect(surf, color, rect, r):
@@ -428,6 +456,14 @@ def draw_buddy(surf, t, state, blink):
                 dot_surf, (160, 130, 220, alpha_val), (4, 4), 3,
             )
             surf.blit(dot_surf, (cx + dx - 4, dot_y - 4))
+
+    # ── Workspace badge (M7) ──────────────────────────────────────
+    # Above the left shoulder; visibility rules (toggle, ≥2 workspaces,
+    # thinking-or-linger) live in the state so drawing stays dumb.
+    if state.workspace_badge_visible():
+        draw_workspace_badge(
+            surf, state.workspace_badge_letter(),
+            workspace_badge_color(state.last_workspace), cx, by, th)
 
     # ── Speech bubble ─────────────────────────────────────────────
     # Drawn last (other than confetti) so it sits above the thinking

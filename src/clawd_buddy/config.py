@@ -195,6 +195,24 @@ def save_volume_pref(v):
     save_config(cfg)
 
 
+# ── M7: workspace badge toggle ───────────────────────────────────────
+def load_saved_workspace_badge():
+    """Return the persisted workspace-badge toggle, defaulting to True.
+    The badge self-suppresses until a second workspace signals, so
+    on-by-default costs single-workspace users nothing."""
+    return bool(load_config().get("workspace_badge", True))
+
+
+def save_workspace_badge_pref(enabled):
+    """Persist the workspace-badge toggle (tray)."""
+    enabled = bool(enabled)
+    cfg = load_config()
+    if cfg.get("workspace_badge") is enabled:
+        return
+    cfg["workspace_badge"] = enabled
+    save_config(cfg)
+
+
 # Quiet-hours presets surfaced in the tray. Each entry is
 # (label, start_minutes_from_midnight, end_minutes_from_midnight).
 # "Off" lives outside this list because its endpoints are None.

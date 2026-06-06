@@ -190,6 +190,25 @@ Security posture:
 - The `quit` action is rejected over HTTP (403) unless a token is
   configured — no unauthenticated curl-able kill switch.
 
+### Workspace badge — who just signaled?
+
+Running several Claude Code sessions across workspaces, all driving
+the same buddy? A small one-letter badge above the buddy's left
+shoulder shows **which workspace last signaled** — so when a wave
+asks for permission, you know which window to switch to.
+
+- The label comes from the Claude Code hook payload's `cwd`
+  automatically (`C:\dev\api` → badge **A**); scripts can override
+  with `--workspace LABEL`, and webhook callers can send
+  `{"action": "wave", "workspace": "ci"}`.
+- Each workspace keeps a **stable color** across restarts, so `api`
+  is always the same tint.
+- **Self-suppressing:** the badge only appears once a *second*
+  distinct workspace signals — with one session running, the buddy
+  looks exactly as it always did.
+- Shows while the buddy is thinking and for ~8 s after a reaction;
+  toggle it from the tray (**Workspace Badge**, persisted).
+
 ### Themes
 
 Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
@@ -380,6 +399,10 @@ clawd-buddy --http-port N    (launch flag) Also accept signals over HTTP
 clawd-buddy --http-token T   (launch flag) Require "Authorization:
                              Bearer T" on every HTTP request. Without a
                              token, the HTTP quit action is rejected.
+clawd-buddy --workspace L    Attach workspace label L to the outgoing
+                             signal (one-letter badge above the buddy
+                             when several workspaces are active).
+                             Auto-derived from the hook cwd when omitted.
 clawd-buddy --prompt-start   Signal start of a Claude Code prompt — greets
                              on the first prompt of a new session, then
                              enters the thinking animation. Reads
@@ -486,7 +509,7 @@ buddy writes a JSON snapshot back on the same socket before closing:
 ```bash
 $ clawd-buddy --status
 {
-  "version": "0.1.20",
+  "version": "0.1.21",
   "pid": 12345,
   "port": 44556,
   "mode": "idle",
@@ -527,6 +550,12 @@ $ clawd-buddy --status
   "http": {
     "enabled": true,
     "port": 8787
+  },
+  "workspace": {
+    "label": "api",
+    "ts": 1717680000.0,
+    "seen_count": 2,
+    "badge_enabled": true
   }
 }
 ```
@@ -539,7 +568,8 @@ and `recent_days` (the M4.1 drinking history) in v0.1.19; the
 `null` when their respective window is disabled;
 `reminder.seconds_until_next` is `null` when the reminder is off and
 `0` when an alarm is firing; `pomodoro.remaining_seconds` is `null`
-when no cycle is running.
+when no cycle is running. The `workspace` block (v0.1.21) reports
+`null` label/ts until the first labelled signal arrives.
 
 This is the recommended "is the buddy alive?" probe — exit code 1 plus
 a stderr message when no buddy is listening, exit code 0 with JSON on
@@ -584,6 +614,7 @@ The buddy adds a system tray icon with a right-click menu:
 - **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, quiet hours) lives in **About… → Reminders**.
 - **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss the current alarm. The next scheduled slot still fires on time.
 - **Stop Pomodoro** — *appears only while a pomodoro cycle is running*. Ends the cycle (same as `clawd-buddy --pomodoro-stop`).
+- **Workspace Badge** — toggle the multi-session workspace badge (default on; it only renders once a second workspace signals anyway). Recording continues while hidden, so re-enabling shows current data.
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
 - **About…** — open a tabbed dialog: **About** (version / repo / author) and **Reminders** (edit interval, sound, and quiet hours; live countdown; "Drank now" button).
 - **Quit** — close the buddy

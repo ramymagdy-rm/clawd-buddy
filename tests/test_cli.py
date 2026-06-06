@@ -146,6 +146,44 @@ class TestFlags:
         args = cli.parse_args(["--http-token", "s3cret"])
         assert args.http_token == "s3cret"
 
+    # ── M7: workspace flag ───────────────────────────────────────────
+    def test_workspace_flag(self):
+        args = cli.parse_args(["--wave", "--workspace", "api"])
+        assert args.workspace == "api"
+
+    def test_workspace_default_none(self):
+        assert cli.parse_args(["--wave"]).workspace is None
+
+
+class TestWorkspaceLabelFromCwd:
+    """The cwd → label derivation must handle both path conventions —
+    the string comes from whatever machine ran the hook, not the host
+    the buddy runs on."""
+
+    def test_posix_path(self):
+        assert cli.workspace_label_from_cwd("/home/r/projects/api") == "api"
+
+    def test_windows_path(self):
+        assert cli.workspace_label_from_cwd("C:\\dev\\ai-helper") == "ai-helper"
+
+    def test_trailing_separators(self):
+        assert cli.workspace_label_from_cwd("/home/r/proj/") == "proj"
+        assert cli.workspace_label_from_cwd("C:\\dev\\proj\\") == "proj"
+
+    def test_mixed_separators(self):
+        assert cli.workspace_label_from_cwd("C:/dev/proj") == "proj"
+
+    def test_root_paths_give_none(self):
+        assert cli.workspace_label_from_cwd("/") is None
+        assert cli.workspace_label_from_cwd("C:\\") is None
+        assert cli.workspace_label_from_cwd("C:") is None
+
+    def test_garbage_gives_none(self):
+        assert cli.workspace_label_from_cwd(None) is None
+        assert cli.workspace_label_from_cwd("") is None
+        assert cli.workspace_label_from_cwd("   ") is None
+        assert cli.workspace_label_from_cwd(42) is None
+
 
 class TestParsePomodoroSpec:
     """Direct coverage of the type-validator — argparse wraps its
@@ -213,6 +251,12 @@ class TestHelpText:
         assert "--pomodoro-stop" in out
         assert "--http-port" in out
         assert "--http-token" in out
+
+    def test_help_lists_M7_flags(self, capsys):
+        with pytest.raises(SystemExit):
+            cli.parse_args(["--help"])
+        out = capsys.readouterr().out
+        assert "--workspace" in out
 
 
 # ── read_hook_stdin behaviours ───────────────────────────────────────

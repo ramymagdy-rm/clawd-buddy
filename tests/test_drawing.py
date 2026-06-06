@@ -244,3 +244,48 @@ class TestWrapBubbleText:
         lines = drawing._wrap_bubble_text(
             font, "one two three four five", narrow, max_lines=2)
         assert lines[-1].endswith("…")
+
+
+# ── M7: workspace badge ──────────────────────────────────────────────
+class TestWorkspaceBadge:
+    def _make_visible(self, state):
+        state.record_workspace("api")
+        state.record_workspace("web")
+        assert state.workspace_badge_visible()
+
+    def test_draw_badge_does_not_crash(self, surface, state):
+        drawing.draw_workspace_badge(
+            surface, "A", (204, 82, 122), 100, 120, state.theme)
+
+    def test_draw_badge_empty_letter_is_noop(self, surface, state):
+        before = pygame.image.tobytes(surface, "RGB")
+        drawing.draw_workspace_badge(
+            surface, None, (204, 82, 122), 100, 120, state.theme)
+        assert pygame.image.tobytes(surface, "RGB") == before
+
+    def test_draw_buddy_with_visible_badge(self, surface, state):
+        self._make_visible(state)
+        drawing.draw_buddy(surface, 1000.0, state, blink=False)
+
+    def test_draw_buddy_with_badge_in_every_mode(self, surface, state):
+        self._make_visible(state)
+        for action in ("trigger", "wave", "greet", "start_thinking"):
+            getattr(state, action)()
+            drawing.draw_buddy(surface, 1000.0, state, blink=False)
+
+    def test_badge_paints_pixels(self, surface, state):
+        # The badge square must actually land on the surface — compare
+        # a badge-on frame against a badge-off frame.
+        self._make_visible(state)
+        drawing.draw_buddy(surface, 1000.0, state, blink=False)
+        with_badge = pygame.image.tobytes(surface, "RGB")
+        surface.fill((0, 0, 0))
+        state.set_workspace_badge_enabled(False)
+        drawing.draw_buddy(surface, 1000.0, state, blink=False)
+        without_badge = pygame.image.tobytes(surface, "RGB")
+        assert with_badge != without_badge
+
+    def test_reduce_motion_still_renders_badge(self, surface, state):
+        self._make_visible(state)
+        state.set_reduce_motion(True)
+        drawing.draw_buddy(surface, 1000.0, state, blink=False)
