@@ -1561,3 +1561,136 @@ class TestNormalizePomodoroSeconds:
         f = buddy_state._normalize_pomodoro_seconds
         assert f(True, 42) == 42
         assert f(False, 42) == 42
+
+
+# ── M7: Workspace badge ──────────────────────────────────────────────
+class TestWorkspaceDefaults:
+    def test_starts_unlabelled(self, state):
+        assert state.last_workspace is None
+        assert state.last_workspace_ts == 0.0
+        assert state.workspaces_seen_count == 0
+        assert state.workspace_badge_enabled is True
+        assert state.workspace_badge_letter() is None
+        assert state.workspace_badge_visible() is False
+
+    def test_ctor_can_disable_badge(self, clock):
+        s = buddy_state.BuddyState(sound_pack="off", clock=clock,
+                                   workspace_badge_enabled=False)
+        assert s.workspace_badge_enabled is False
+
+
+class TestRecordWorkspace:
+    def test_records_label_and_ts(self, state, clock):
+        clock.advance(5)
+        state.record_workspace("api")
+        assert state.last_workspace == "api"
+        assert state.last_workspace_ts == clock.t
+        assert state.workspaces_seen_count == 1
+
+    def test_distinct_labels_accumulate(self, state):
+        state.record_workspace("api")
+        state.record_workspace("web")
+        state.record_workspace("api")  # repeat doesn't double-count
+        assert state.workspaces_seen_count == 2
+        assert state.last_workspace == "api"
+
+    def test_garbage_label_ignored(self, state):
+        state.record_workspace("api")
+        for bad in (None, 42, "", "   ", "\x00\x01", ["x"]):
+            state.record_workspace(bad)
+        # The previous good label survives.
+        assert state.last_workspace == "api"
+        assert state.workspaces_seen_count == 1
+
+    def test_label_is_capped(self, state):
+        state.record_workspace("x" * 100)
+        assert len(state.last_workspace) == buddy_state.WORKSPACE_LABEL_MAX
+
+    def test_label_strips_whitespace_and_controls(self, state):
+        state.record_workspace("  api\t ")
+        assert state.last_workspace == "api"
+
+
+class TestWorkspaceBadgeVisibility:
+    def _two_workspaces(self, state):
+        state.record_workspace("api")
+        state.record_workspace("web")
+
+    def test_hidden_with_single_workspace(self, state):
+        state.record_workspace("api")
+        state.start_thinking()
+        assert state.workspace_badge_visible() is False
+
+    def test_visible_with_two_workspaces_within_linger(self, state):
+        self._two_workspaces(state)
+        assert state.workspace_badge_visible() is True
+
+    def test_visible_while_thinking_beyond_linger(self, state, clock):
+        self._two_workspaces(state)
+        state.start_thinking()
+        clock.advance(buddy_state.WORKSPACE_BADGE_LINGER_S + 100)
+        assert state.workspace_badge_visible() is True
+
+    def test_hidden_after_linger_when_idle(self, state, clock):
+        self._two_workspaces(state)
+        clock.advance(buddy_state.WORKSPACE_BADGE_LINGER_S + 1)
+        assert state.workspace_badge_visible() is False
+
+    def test_toggle_hides_but_keeps_recording(self, state):
+        self._two_workspaces(state)
+        state.set_workspace_badge_enabled(False)
+        assert state.workspace_badge_visible() is False
+        state.record_workspace("cli")
+        state.set_workspace_badge_enabled(True)
+        assert state.workspace_badge_visible() is True
+        assert state.workspaces_seen_count == 3
+
+    def test_letter_is_first_char_uppercased(self, state):
+        state.record_workspace("api")
+        assert state.workspace_badge_letter() == "A"
+        state.record_workspace("Web")
+        assert state.workspace_badge_letter() == "W"
+
+
+class TestWorkspaceBadgeColor:
+    def test_color_is_stable_for_same_label(self):
+        a = buddy_state.workspace_badge_color("api")
+        b = buddy_state.workspace_badge_color("api")
+        assert a == b
+
+    def test_color_comes_from_palette(self):
+        for label in ("api", "web", "cli", "docs", "infra"):
+            assert (buddy_state.workspace_badge_color(label)
+                    in buddy_state.WORKSPACE_BADGE_COLORS)
+
+    def test_color_handles_unicode(self):
+        # crc32 over utf-8 bytes — must not raise on non-ASCII labels.
+        c = buddy_state.workspace_badge_color("проект")
+        assert c in buddy_state.WORKSPACE_BADGE_COLORS
+
+
+class TestNormalizeWorkspaceLabel:
+    def test_valid_passthrough(self):
+        f = buddy_state._normalize_workspace_label
+        assert f("api") == "api"
+        assert f("my-project") == "my-project"
+
+    def test_non_string_rejected(self):
+        f = buddy_state._normalize_workspace_label
+        assert f(None) is None
+        assert f(42) is None
+        assert f(["api"]) is None
+
+    def test_blank_and_control_rejected(self):
+        f = buddy_state._normalize_workspace_label
+        assert f("") is None
+        assert f("   ") is None
+        assert f("\x00\x07") is None
+
+    def test_controls_stripped_from_mixed(self):
+        f = buddy_state._normalize_workspace_label
+        assert f("a\x00pi") == "api"
+
+    def test_capped(self):
+        f = buddy_state._normalize_workspace_label
+        assert len(f("y" * 500)) == buddy_state.WORKSPACE_LABEL_MAX

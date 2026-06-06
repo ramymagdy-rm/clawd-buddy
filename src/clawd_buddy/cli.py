@@ -53,6 +53,30 @@ def read_hook_stdin(stream=None):
     return parsed if isinstance(parsed, dict) else {}
 
 
+def workspace_label_from_cwd(cwd):
+    """Derive a short workspace label from a hook payload's `cwd`.
+
+    The label is the directory basename ("C:\\dev\\api" → "api",
+    "/home/r/proj/" → "proj"). Returns None for missing / blank /
+    root-only paths so callers can simply skip attaching the key.
+    Handles both separator styles regardless of host OS — the path
+    string comes from whatever machine ran the hook.
+    """
+    if not isinstance(cwd, str):
+        return None
+    trimmed = cwd.strip().rstrip("/\\")
+    if not trimmed:
+        return None
+    # Split on both separators; os.path.basename alone only knows the
+    # host convention.
+    base = trimmed.replace("\\", "/").rsplit("/", 1)[-1]
+    base = base.strip()
+    # A bare drive ("C:") or empty remainder isn't a workspace name.
+    if not base or (len(base) == 2 and base[1] == ":"):
+        return None
+    return base
+
+
 def parse_pomodoro_spec(spec):
     """argparse `type=` validator for `--pomodoro WORK/BREAK`.
 
@@ -97,6 +121,7 @@ def build_parser():
             "  clawd-buddy --pomodoro 25/5   Start a 25min work / 5min break cycle\n"
             "  clawd-buddy --pomodoro-stop   End the running pomodoro cycle\n"
             "  clawd-buddy --http-port 8787  Also accept signals over HTTP (localhost)\n"
+            "  clawd-buddy --wave --workspace api   Wave, badged as workspace 'api'\n"
             "  clawd-buddy --prompt-start Greet (if new session) + start thinking\n"
             "  clawd-buddy --top          Bring buddy to front (re-assert topmost)\n"
             "  clawd-buddy --quit         Ask the running buddy to exit cleanly\n"
@@ -190,6 +215,14 @@ def build_parser():
                          "HTTP request. Without a token the HTTP 'quit' "
                          "action is rejected; everything else works "
                          "unauthenticated (localhost-only surface)."))
+    # M7: workspace label attached to outgoing signals. Usually derived
+    # automatically from the hook payload's `cwd`; the flag overrides.
+    p.add_argument("--workspace", default=None, metavar="LABEL",
+                   help=("Workspace label to attach to the signal being "
+                         "sent (shown as a one-letter badge above the "
+                         "buddy when several workspaces are active). "
+                         "Defaults to the directory name from the Claude "
+                         "Code hook payload's cwd, when available."))
     return p
 
 

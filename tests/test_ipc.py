@@ -489,6 +489,62 @@ class TestStatusHttpBlock:
         assert block == {"enabled": True, "port": 8787}
 
 
+# ── Workspace passthrough + status block (M7) ────────────────────────
+class TestWorkspacePassthrough:
+    def test_wave_payload_records_workspace(self, state):
+        ipc.dispatch_action(state, "wave", {"workspace": "api"})
+        assert state.last_workspace == "api"
+        assert state.waving
+
+    def test_prompt_start_payload_records_workspace(self, state):
+        ipc.dispatch_action(state, "prompt_start",
+                            {"session_id": "s1", "workspace": "web"})
+        assert state.last_workspace == "web"
+
+    def test_any_action_carries_workspace(self, state):
+        # Transport-agnostic rule: the key is honoured before routing,
+        # whatever the action.
+        ipc.dispatch_action(state, "message",
+                            {"text": "hi", "workspace": "cli"})
+        assert state.last_workspace == "cli"
+
+    def test_payload_without_workspace_leaves_state_alone(self, state):
+        ipc.dispatch_action(state, "wave", {"workspace": "api"})
+        ipc.dispatch_action(state, "celebrate")
+        assert state.last_workspace == "api"
+
+    def test_garbage_workspace_ignored(self, state):
+        ipc.dispatch_action(state, "wave", {"workspace": "api"})
+        ipc.dispatch_action(state, "wave", {"workspace": 42})
+        assert state.last_workspace == "api"
+
+
+class TestStatusWorkspaceBlock:
+    def test_workspace_block_shape(self, state):
+        block = ipc.build_status_response(state)["workspace"]
+        for key in ("label", "ts", "seen_count", "badge_enabled"):
+            assert key in block
+
+    def test_workspace_block_defaults(self, state):
+        block = ipc.build_status_response(state)["workspace"]
+        assert block["label"] is None
+        assert block["ts"] is None
+        assert block["seen_count"] == 0
+        assert block["badge_enabled"] is True
+
+    def test_workspace_block_reflects_signals(self, state, clock):
+        ipc.dispatch_action(state, "wave", {"workspace": "api"})
+        ipc.dispatch_action(state, "wave", {"workspace": "web"})
+        block = ipc.build_status_response(state)["workspace"]
+        assert block["label"] == "web"
+        assert block["ts"] == clock.t
+        assert block["seen_count"] == 2
+
+    def test_status_with_workspace_is_json_serialisable(self, state):
+        ipc.dispatch_action(state, "wave", {"workspace": "api"})
+        json.dumps(ipc.build_status_response(state))
+
+
 # ── send_signal client ───────────────────────────────────────────────
 class TestSendSignal:
     def test_connection_refused_returns_false(self):
