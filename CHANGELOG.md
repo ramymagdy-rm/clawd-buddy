@@ -4,6 +4,51 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.21] - 2026-06-06
+
+### Added — Milestone 7: multi-session aware
+
+- **Workspace badge.** When several Claude Code sessions (or any
+  labelled senders) drive the same buddy, a small one-letter badge
+  appears above the buddy's left shoulder showing **which workspace
+  last signaled** — the answer to "three sessions are running; who
+  just asked for permission?".
+  - The label is derived automatically from the Claude Code hook
+    payload's `cwd` (directory basename — `C:\dev\api` → `api`); an
+    explicit `--workspace LABEL` flag overrides. Both path separator
+    conventions are handled regardless of host OS.
+  - Every outgoing signal now carries the label (celebrate, wave,
+    prompt-start, message, drank, pomodoro — all of them), and the
+    dispatcher records it before routing, so the TCP and HTTP
+    transports behave identically. A webhook caller can badge its
+    signals too: `{"action": "wave", "workspace": "ci"}`.
+  - **Self-suppressing:** the badge only renders once a *second*
+    distinct workspace signals in the current run — single-session
+    users see zero change.
+  - Visible while the buddy is thinking (session actively running)
+    and for 8 seconds after the last labelled signal.
+  - Each workspace gets a **stable color** (crc32 → 8-color palette,
+    consistent across restarts); the badge letter is the label's
+    first character, uppercased.
+  - New tray toggle **Workspace Badge** (default on, persisted as
+    `workspace_badge` in `config.json`). Disabling hides the badge
+    but keeps recording, so re-enabling mid-session shows correct
+    data.
+- **`--status` payload** gains a `workspace` block: `label`, `ts`
+  (when that label last signaled), `seen_count` (distinct workspaces
+  this run), and `badge_enabled`.
+
+### Changed
+
+- `clawd-buddy` signal invocations now read the Claude Code hook JSON
+  from stdin for **every** signal flag (previously only
+  `--prompt-start` did) so Stop / PermissionRequest hooks contribute
+  their `cwd` to the badge. Interactive (TTY) invocations are
+  unaffected — stdin is still skipped.
+- Workspace labels arriving over IPC/HTTP are sanitised (non-strings
+  rejected, control characters stripped, capped at 24 chars); garbage
+  never erases a previous good label.
+
 ## [0.1.20] - 2026-06-06
 
 ### Added — Milestone 6: driven by anything

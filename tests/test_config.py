@@ -471,3 +471,37 @@ class TestReminderPublicSurface:
 
     def test_anchor_default_present(self):
         assert config.DEFAULT_REMINDER_ANCHOR_MINUTE == 8 * 60
+
+
+# ── M7: workspace badge toggle ───────────────────────────────────────
+class TestWorkspaceBadgePref:
+    def test_default_true_when_missing(self, isolated_config_dir):
+        assert config.load_saved_workspace_badge() is True
+
+    def test_round_trip_disable(self, isolated_config_dir):
+        config.save_workspace_badge_pref(False)
+        assert config.load_saved_workspace_badge() is False
+
+    def test_round_trip_enable(self, isolated_config_dir):
+        config.save_workspace_badge_pref(False)
+        config.save_workspace_badge_pref(True)
+        assert config.load_saved_workspace_badge() is True
+
+    def test_save_normalises_to_bool(self, isolated_config_dir):
+        config.save_workspace_badge_pref(0)
+        raw = config.load_config()
+        assert raw["workspace_badge"] is False
+
+    def test_save_skips_redundant_write(self, isolated_config_dir):
+        config.save_workspace_badge_pref(False)
+        path = config._config_path()
+        before = os.path.getmtime(path)
+        config.save_workspace_badge_pref(False)  # same value — no write
+        assert os.path.getmtime(path) == before
+
+    def test_does_not_disturb_other_keys(self, isolated_config_dir):
+        config.save_config({"theme": "nord"})
+        config.save_workspace_badge_pref(False)
+        cfg = config.load_config()
+        assert cfg["theme"] == "nord"
+        assert cfg["workspace_badge"] is False

@@ -136,6 +136,33 @@ POMODORO_WORK_TEXT = "Back to work!"
 POMODORO_MAX_CATCHUP = 48
 
 
+# M7: workspace badge. After a reaction's signal arrives the badge
+# lingers this many seconds (while thinking it stays up regardless —
+# an active session should be identifiable for its whole duration).
+WORKSPACE_BADGE_LINGER_S = 8.0
+
+# Cap on the stored workspace label. The badge renders one letter; the
+# full label is surfaced in `--status`, where 24 chars is plenty for a
+# directory basename and bounds memory against a hostile sender.
+WORKSPACE_LABEL_MAX = 24
+
+# Badge tint palette. A label hashes (stably — crc32, not Python's
+# per-process-seeded hash()) onto one of these, so the same workspace
+# always wears the same color across launches and machines. All
+# entries are saturated-but-dark enough that white text reads on top,
+# and none collide with the four attention-border colors.
+WORKSPACE_BADGE_COLORS = (
+    (204, 82, 122),    # raspberry
+    (66, 135, 245),    # azure
+    (220, 130, 50),    # amber
+    (52, 168, 133),    # jade
+    (148, 92, 216),    # violet
+    (190, 160, 40),    # olive gold
+    (225, 95, 80),     # coral
+    (70, 160, 200),    # steel cyan
+)
+
+
 # Confetti palette — shared across all themes so a celebrate animation
 # is always rainbow-coloured regardless of which theme is active.
 CONFETTI_COLORS = [
@@ -224,6 +251,29 @@ def _latest_slot_at_or_before(anchor_min, interval_min, now_min):
     return anchor_min + n * interval_min
 
 
+def _normalize_workspace_label(label):
+    """Coerce an incoming workspace label into a usable string, or
+    `None` when there's nothing usable. Strips whitespace and control
+    characters, caps at WORKSPACE_LABEL_MAX. Labels arrive over IPC /
+    HTTP, so this is untrusted input — same posture as every other
+    payload validator in this file."""
+    if not isinstance(label, str):
+        return None
+    label = "".join(ch for ch in label if ch.isprintable()).strip()
+    if not label:
+        return None
+    return label[:WORKSPACE_LABEL_MAX]
+
+
+def workspace_badge_color(label):
+    """Stable label → RGB tint. Uses crc32 (deterministic across
+    processes and platforms) rather than `hash()` (salted per process)
+    so workspace 'api' is the same color tomorrow as today."""
+    import zlib
+    idx = zlib.crc32(label.encode("utf-8")) % len(WORKSPACE_BADGE_COLORS)
+    return WORKSPACE_BADGE_COLORS[idx]
+
+
 def _normalize_pomodoro_seconds(value, default):
     """Coerce a pomodoro phase duration (seconds) into
     [POMODORO_MIN_S, POMODORO_MAX_S]. Anything non-numeric or out of
@@ -300,7 +350,8 @@ class BuddyState:
                  reminder_anchor_minute=DEFAULT_REMINDER_ANCHOR_MINUTE,
                  now_min_fn=None,
                  cups_today=0, cups_today_date=None,
-                 recent_days=None, history_save_fn=None):
+                 recent_days=None, history_save_fn=None,
+                 workspace_badge_enabled=True):
         # `clock` indirection so unit tests can advance time without
         # actually sleeping. Defaults to time.time at runtime.
         self._clock = clock if clock is not None else time.time
@@ -371,6 +422,18 @@ class BuddyState:
         self.pomodoro_work_s = DEFAULT_POMODORO_WORK_S
         self.pomodoro_break_s = DEFAULT_POMODORO_BREAK_S
         self.pomodoro_cycles = 0
+
+        # M7: workspace badge. `last_workspace` is the label of the
+        # workspace whose signal arrived most recently (None until the
+        # first labelled signal); `_workspaces_seen` is every distinct
+        # label this run — the badge only renders once a *second*
+        # workspace shows up, so single-session users never see it.
+        # In-memory only: "which window said that?" is a question about
+        # the current run, not history.
+        self.workspace_badge_enabled = bool(workspace_badge_enabled)
+        self.last_workspace = None
+        self.last_workspace_ts = 0.0
+        self._workspaces_seen = set()
 
         # M3: when wave/greet preempts thinking, remember to resume the
         # thinking animation after the cue clears (and any items behind
@@ -925,6 +988,55 @@ class BuddyState:
                 self._pomodoro_phase_end += self.pomodoro_work_s
                 self.wave()  # attention cue back to work
                 self.set_message(POMODORO_WORK_TEXT)
+
+    # ── M7: workspace badge surface ──────────────────────────────
+    def record_workspace(self, label):
+        """Note that `label`'s workspace just signaled. Called by the
+        IPC dispatcher for any payload carrying a `workspace` key —
+        transport-agnostic, so TCP and HTTP behave identically.
+        Unusable labels (non-string, blank, control-chars-only) are
+        ignored rather than erasing the previous one."""
+        label = _normalize_workspace_label(label)
+        if label is None:
+            return
+        self.last_workspace = label
+        self.last_workspace_ts = self._clock()
+        self._workspaces_seen.add(label)
+
+    def set_workspace_badge_enabled(self, enabled):
+        """Tray toggle. Disabling only hides the badge — recording
+        continues, so re-enabling mid-session shows correct data."""
+        self.workspace_badge_enabled = bool(enabled)
+
+    @property
+    def workspaces_seen_count(self):
+        return len(self._workspaces_seen)
+
+    def workspace_badge_letter(self):
+        """The single character the badge renders — first letter of
+        the label, uppercased. None when no workspace has signaled."""
+        if not self.last_workspace:
+            return None
+        return self.last_workspace[0].upper()
+
+    def workspace_badge_visible(self):
+        """Whether the drawing layer should render the badge this
+        frame. Four gates, per the design note:
+          1. the tray toggle is on;
+          2. a labelled signal has arrived;
+          3. at least TWO distinct workspaces have signaled this run —
+             with a single workspace the badge is pure noise;
+          4. the buddy is thinking (session actively running), or the
+             last labelled signal is within the linger window.
+        """
+        if not (self.workspace_badge_enabled and self.last_workspace):
+            return False
+        if len(self._workspaces_seen) < 2:
+            return False
+        if self.thinking:
+            return True
+        return (self._clock() - self.last_workspace_ts
+                <= WORKSPACE_BADGE_LINGER_S)
 
     # ── Mode introspection (used by drawing and tests) ───────────
     @property

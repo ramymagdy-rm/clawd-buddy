@@ -27,6 +27,7 @@ from ..config import (
     save_sound_pack_pref,
     save_theme_pref,
     save_volume_pref,
+    save_workspace_badge_pref,
 )
 from .about import _make_buddy_icon_image, show_about_dialog
 from .sound import SOUND_PACK_NAMES, SOUND_PACK_OFF
@@ -231,6 +232,16 @@ def _create_tray_impl(state):
     def _reminder_enabled_checker(_item):
         return state.reminder_enabled
 
+    # M7: Workspace Badge — top-level toggle. Recording continues while
+    # hidden, so flipping it back on mid-session shows correct data.
+    def on_workspace_badge_toggle(_icon, item):
+        new_val = not bool(item.checked)
+        state.set_workspace_badge_enabled(new_val)
+        save_workspace_badge_pref(new_val)
+
+    def _workspace_badge_checker(_item):
+        return state.workspace_badge_enabled
+
     # M4: "I drank water" — top-level acknowledgment shortcut. Hidden
     # via `visible=` when there's no active alarm, since clicking it
     # outside of an alarm is harmless (just resets the timer) but
@@ -277,6 +288,11 @@ def _create_tray_impl(state):
             "Water Reminder",
             on_reminder_toggle,
             checked=_reminder_enabled_checker,
+        ),
+        pystray.MenuItem(
+            "Workspace Badge",
+            on_workspace_badge_toggle,
+            checked=_workspace_badge_checker,
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Clawd Buddy v{APP_VERSION}", None, enabled=False),

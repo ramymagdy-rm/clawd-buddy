@@ -115,8 +115,14 @@ def dispatch_action(state, action, payload=None):
     Note: `status` is a no-op here — the listener intercepts it before
     dispatch to send a response. We still register it in KNOWN_ACTIONS
     so the protocol surface is centralised in one place.
+
+    M7: any payload may carry a `workspace` label — recorded before
+    routing, so every action (and every transport: TCP, HTTP) updates
+    the workspace badge identically without per-action plumbing.
     """
     payload = payload or {}
+    if "workspace" in payload:
+        state.record_workspace(payload.get("workspace"))
     if action == ACTION_WAVE:
         state.wave()
     elif action == ACTION_RAISE:
@@ -245,6 +251,16 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "enabled": state.http_port is not None,
         "port": state.http_port,
     }
+    # M7: workspace badge. `label`/`ts` are None until the first
+    # labelled signal; `seen_count` is how many distinct workspaces
+    # signaled this run (the badge needs ≥ 2 to render).
+    workspace_block = {
+        "label": state.last_workspace,
+        "ts": (state.last_workspace_ts
+               if state.last_workspace is not None else None),
+        "seen_count": int(state.workspaces_seen_count),
+        "badge_enabled": bool(state.workspace_badge_enabled),
+    }
     return {
         "version": __version__,
         "pid": os.getpid(),
@@ -265,6 +281,7 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "reminder": reminder_block,
         "pomodoro": pomodoro_block,
         "http": http_block,
+        "workspace": workspace_block,
     }
 
 

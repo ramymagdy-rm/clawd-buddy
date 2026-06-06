@@ -30,6 +30,9 @@ Options:
   --http-port N    Also accept signals over HTTP on localhost:N
                    (POST /signal, GET /status — mirrors the TCP protocol)
   --http-token T   Require a Bearer token on every HTTP request
+  --workspace L    Attach workspace label L to the outgoing signal
+                   (one-letter badge above the buddy when several
+                   workspaces are active; auto-derived from hook cwd)
   --help           Show this help and exit
 
 Controls:
@@ -49,7 +52,7 @@ import sys
 import threading
 import time
 
-from .cli import parse_args, read_hook_stdin
+from .cli import parse_args, read_hook_stdin, workspace_label_from_cwd
 from .config import (
     load_saved_quiet_hours,
     load_saved_reduce_motion,
@@ -61,6 +64,7 @@ from .config import (
     load_saved_sound_pack,
     load_saved_theme,
     load_saved_volume,
+    load_saved_workspace_badge,
     save_theme_pref,
 )
 from .constants import FPS, SOCK_PORT, WIN_H, WIN_W
@@ -174,6 +178,19 @@ def main():
                 payload_obj["session_id"] = session_id
         else:
             payload_obj["action"] = "celebrate"
+        # M7: attach a workspace label to whatever signal is going out.
+        # Explicit --workspace wins; otherwise derive from the hook
+        # payload's cwd (Stop / PermissionRequest hooks pipe JSON too,
+        # not just UserPromptSubmit — so re-read stdin unless the
+        # prompt-start branch already consumed it). Harmless extra key
+        # for receivers that don't care.
+        if args.prompt_start:
+            ws_cwd = hook.get("cwd")
+        else:
+            ws_cwd = read_hook_stdin().get("cwd")
+        workspace = args.workspace or workspace_label_from_cwd(ws_cwd)
+        if workspace:
+            payload_obj["workspace"] = workspace
         if send_signal(payload_obj, port=port):
             print(f"[buddy] Sent: {payload_obj['action']}")
         else:
@@ -280,6 +297,9 @@ def main():
         cups_today_date=cups_today_date_seed,
         recent_days=saved_recent,
         history_save_fn=history.save_history,
+        # M7: workspace-badge toggle (default on; only renders once a
+        # second workspace signals anyway).
+        workspace_badge_enabled=load_saved_workspace_badge(),
     )
     state.topmost = topmost
 
