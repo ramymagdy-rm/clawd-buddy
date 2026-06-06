@@ -243,11 +243,26 @@ def _create_tray_impl(state):
     def _drank_visible(_item):
         return state.reminder_active
 
+    # M6: "Stop Pomodoro" — same hidden-until-relevant pattern as
+    # "I drank water". The cycle is started from the CLI
+    # (`--pomodoro 25/5`); the tray only needs the escape hatch, so
+    # the always-visible menu stays uncluttered for non-pomodoro users.
+    def on_pomodoro_stop(_icon, _item):
+        state.stop_pomodoro()
+
+    def _pomodoro_visible(_item):
+        return state.pomodoro_active
+
     menu = pystray.Menu(
         pystray.MenuItem(
             "I drank water",
             on_drank,
             visible=_drank_visible,
+        ),
+        pystray.MenuItem(
+            "Stop Pomodoro",
+            on_pomodoro_stop,
+            visible=_pomodoro_visible,
         ),
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),

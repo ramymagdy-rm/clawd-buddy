@@ -53,6 +53,32 @@ def read_hook_stdin(stream=None):
     return parsed if isinstance(parsed, dict) else {}
 
 
+def parse_pomodoro_spec(spec):
+    """argparse `type=` validator for `--pomodoro WORK/BREAK`.
+
+    Accepts "25/5"-style minute pairs; returns `(work_min, break_min)`
+    as ints. Bounds match the state layer's seconds validator
+    (1–180 minutes per phase). Raises ArgumentTypeError with a usable
+    message on anything else — argparse turns that into the standard
+    exit-code-2 usage error.
+    """
+    parts = str(spec).split("/")
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(
+            f"expected WORK/BREAK minutes (e.g. 25/5), got {spec!r}")
+    try:
+        work_min = int(parts[0])
+        break_min = int(parts[1])
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"WORK and BREAK must be whole minutes, got {spec!r}")
+    for label, val in (("WORK", work_min), ("BREAK", break_min)):
+        if not (1 <= val <= 180):
+            raise argparse.ArgumentTypeError(
+                f"{label} must be 1-180 minutes, got {val}")
+    return work_min, break_min
+
+
 def build_parser():
     """Construct the argparse.ArgumentParser. Split from parse_args so
     tests can introspect the parser (e.g. dump help text without exiting)."""
@@ -68,6 +94,9 @@ def build_parser():
             "  clawd-buddy --wave         Wave for attention\n"
             "  clawd-buddy --message 'tests green'  Show a speech bubble\n"
             "  clawd-buddy --status       Print running buddy state as JSON\n"
+            "  clawd-buddy --pomodoro 25/5   Start a 25min work / 5min break cycle\n"
+            "  clawd-buddy --pomodoro-stop   End the running pomodoro cycle\n"
+            "  clawd-buddy --http-port 8787  Also accept signals over HTTP (localhost)\n"
             "  clawd-buddy --prompt-start Greet (if new session) + start thinking\n"
             "  clawd-buddy --top          Bring buddy to front (re-assert topmost)\n"
             "  clawd-buddy --quit         Ask the running buddy to exit cleanly\n"
@@ -135,6 +164,32 @@ def build_parser():
     p.add_argument("--drank", action="store_true",
                    help=("Tell the running buddy you drank water — clears "
                          "any active reminder alarm and resets the timer."))
+    # M6: pomodoro cycle — signal flags, mirroring --wave/--drank
+    # (fire-and-forget; exit 0 on delivery, 1 if no buddy listening).
+    p.add_argument("--pomodoro", metavar="WORK/BREAK",
+                   type=parse_pomodoro_spec, default=None,
+                   help=("Start a pomodoro cycle on the running buddy. "
+                         "WORK/BREAK are minutes (1-180 each), e.g. 25/5. "
+                         "The buddy celebrates when a break starts, waves "
+                         "when it's time to get back to work, and repeats "
+                         "until stopped."))
+    p.add_argument("--pomodoro-stop", dest="pomodoro_stop",
+                   action="store_true",
+                   help="End the running buddy's pomodoro cycle.")
+    # M6: HTTP webhook listener — launch-time flags (only meaningful
+    # when starting the buddy, ignored by signal-and-exit invocations).
+    p.add_argument("--http-port", dest="http_port", type=int, default=None,
+                   metavar="PORT",
+                   help=("Also accept signals over HTTP on this port "
+                         "(binds 127.0.0.1 only). POST /signal takes the "
+                         "same JSON as the TCP protocol; GET /status "
+                         "returns the --status snapshot. Off by default."))
+    p.add_argument("--http-token", dest="http_token", default=None,
+                   metavar="TOKEN",
+                   help=("Require 'Authorization: Bearer TOKEN' on every "
+                         "HTTP request. Without a token the HTTP 'quit' "
+                         "action is rejected; everything else works "
+                         "unauthenticated (localhost-only surface)."))
     return p
 
 
