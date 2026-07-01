@@ -1694,3 +1694,25 @@ class TestNormalizeWorkspaceLabel:
     def test_capped(self):
         f = buddy_state._normalize_workspace_label
         assert len(f("y" * 500)) == buddy_state.WORKSPACE_LABEL_MAX
+
+
+# ──  Window placement requests (tray -> main loop flags) ──
+class TestWindowPlacementRequests:
+    """`bring_to_front` and `center_on_screen` are thread-safe requests:
+    the tray daemon flips a flag, the render thread drains it. Here we
+    just assert the flag contract, since the actual window move lives in
+    the platform layer."""
+
+    def test_flags_default_false(self, state):
+        assert state._raise_requested is False
+        assert state._center_requested is False
+
+    def test_bring_to_front_sets_only_raise_flag(self, state):
+        state.bring_to_front()
+        assert state._raise_requested is True
+        assert state._center_requested is False
+
+    def test_center_on_screen_sets_only_center_flag(self, state):
+        state.center_on_screen()
+        assert state._center_requested is True
+        assert state._raise_requested is False
