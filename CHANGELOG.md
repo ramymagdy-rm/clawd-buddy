@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [0.1.22] - 2026-07-01
 
+### Added
+
+- **Tray → Center on Screen.** New right-click menu entry that moves the
+  buddy to the middle of the screen — a one-click way to find it if it
+  has been dragged to an awkward spot or a monitor was disconnected.
+  Complements *Bring to Front* (which re-asserts z-order); centering
+  uses the window's current size, so it stays centered at whatever scale
+  (`Ctrl+2/3/4`) you're using.
+
 ### Fixed
 
 - **Buddy invisible on scaled Windows 11 displays ([#1]).** On a display

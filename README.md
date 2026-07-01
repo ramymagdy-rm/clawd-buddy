@@ -608,6 +608,7 @@ The buddy adds a system tray icon with a right-click menu:
 
 - **Test Celebration** — trigger the celebrate animation
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
+- **Center on Screen** — move the buddy to the middle of the screen (recovers a dragged-away or off-screen window)
 - **Theme** — pick one of the 8 themes (current one is checked)
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.

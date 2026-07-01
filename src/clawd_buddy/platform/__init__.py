@@ -134,6 +134,21 @@ def _compute_taskbar_anchored_position(scr_w, scr_h, bar_top, bar_valid):
     return x, y
 
 
+def center_window(handle):
+    """Move the window to the center of the primary screen.
+
+    Uses the window's *current* size (so it stays centered at whatever
+    scale the user picked) and the same coordinate space as
+    get_initial_position — after set_dpi_awareness that space is
+    physical pixels, so the math lines up on scaled displays too. Clamped
+    to non-negative in case the window is larger than the screen."""
+    _, _, ww, wh = get_window_rect(handle)
+    scr_w, scr_h = _get_screen_size()
+    x = max(0, (scr_w - ww) // 2)
+    y = max(0, (scr_h - wh) // 2)
+    move_window(handle, x, y)
+
+
 def get_initial_position():
     """Return (win_x, win_y) for the buddy window."""
     if sys.platform == "win32":

@@ -28,6 +28,7 @@ class TestFacadeExports:
         "raise_window",
         "get_initial_position",
         "resize_window",
+        "center_window",
         "get_bg_fill",
         "set_dpi_awareness",
         "enable_startup",
@@ -160,6 +161,37 @@ class TestInitialPositionMath:
             200, 100, 60, bar_valid=True)
         assert y == 0
         assert x == 0
+
+
+class TestCenterWindow:
+    """center_window composes get_window_rect + _get_screen_size +
+    move_window. Patch those and capture the move to assert the geometry
+    without touching a real display."""
+
+    def _patch(self, monkeypatch, rect, screen):
+        moved = {}
+        monkeypatch.setattr(plat, "get_window_rect", lambda h: rect)
+        monkeypatch.setattr(plat, "_get_screen_size", lambda: screen)
+        monkeypatch.setattr(
+            plat, "move_window", lambda h, x, y: moved.update(x=x, y=y))
+        return moved
+
+    def test_centers_on_screen(self, monkeypatch):
+        # 200x260 window on a 1920x1200 screen → centered top-left corner.
+        moved = self._patch(monkeypatch, (0, 0, WIN_W, WIN_H), (1920, 1200))
+        plat.center_window(handle=1234)
+        assert moved == {"x": (1920 - WIN_W) // 2, "y": (1200 - WIN_H) // 2}
+
+    def test_uses_current_window_size_not_native(self, monkeypatch):
+        # A scaled-up (Ctrl+4) window stays centered at its actual size.
+        moved = self._patch(monkeypatch, (10, 10, 400, 520), (1920, 1200))
+        plat.center_window(handle=1234)
+        assert moved == {"x": (1920 - 400) // 2, "y": (1200 - 520) // 2}
+
+    def test_never_negative_when_window_bigger_than_screen(self, monkeypatch):
+        moved = self._patch(monkeypatch, (0, 0, 3000, 3000), (1920, 1200))
+        plat.center_window(handle=1234)
+        assert moved == {"x": 0, "y": 0}
 
 
 class TestSetDpiAwareness:

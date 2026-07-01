@@ -72,6 +72,7 @@ from .ipc import request_status, send_signal, socket_listener
 from .webhook import webhook_listener
 from .platform import (
     auto_detach,
+    center_window,
     disable_startup,
     enable_startup,
     get_bg_fill,
@@ -374,6 +375,12 @@ def main():
             topmost = True
             state.topmost = True
             raise_window(handle)
+
+        # Apply pending center-on-screen request (tray → main thread, so
+        # the window move stays off the tray daemon thread).
+        if state._center_requested:
+            state._center_requested = False
+            center_window(handle)
 
         # M3: tray's Volume submenu mutates state.volume on the tray
         # thread and flips _volume_changed; the main loop re-applies
