@@ -81,6 +81,7 @@ from .platform import (
     move_window,
     raise_window,
     resize_window,
+    set_dpi_awareness,
     setup_window,
 )
 from . import history
@@ -243,6 +244,15 @@ def main():
         # a celebrate, but a malformed payload here would just be ignored.
         send_signal({"message": "hello"}, port=port)
         sys.exit(0)
+
+    # Declare DPI awareness before any screen metric or window is created.
+    # On scaled Windows 11 displays a DPI-unaware process reads a
+    # shrunk logical screen size but a physical taskbar position, and
+    # get_initial_position() then places the window off-screen (issue #1).
+    # Must run before get_initial_position() and pygame.init() below.
+    mode = set_dpi_awareness()
+    if mode:
+        print(f"[buddy] DPI awareness: {mode}")
 
     # Compute initial window position (may init display subsystem)
     win_x, win_y = get_initial_position()

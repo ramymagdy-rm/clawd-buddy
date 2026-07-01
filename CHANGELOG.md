@@ -4,6 +4,35 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.22] - 2026-07-01
+
+### Fixed
+
+- **Buddy invisible on scaled Windows 11 displays ([#1]).** On a display
+  set to 125–200% scaling (the Windows 11 laptop default), the buddy
+  process ran DPI-*virtualized*: `GetSystemMetrics` reported a
+  shrunk logical screen (e.g. 800px tall at 150%) while
+  `SHAppBarMessage` kept reporting the taskbar in physical pixels
+  (top ≈ 1152). The initial-position math then placed the window ~120px
+  **below** the logical screen — the process was alive and played its
+  notification sound, but the window rendered nowhere on screen, and
+  neither `--top` nor the tray's *Bring to Front* could recover it.
+  - The GUI process now declares **Per-Monitor-v2 DPI awareness** at
+    startup (before any screen metric is read or window is created), so
+    screen and taskbar coordinates share one physical pixel space.
+    Graceful fallback ladder — Per-Monitor-v2 → Per-Monitor (shcore) →
+    System-DPI — covers older Windows; a total failure is non-fatal.
+  - Initial placement is now **clamped fully on-screen** as a second
+    line of defence: even if DPI awareness cannot be applied, or the
+    taskbar rectangle is unavailable (auto-hidden bar, shell API
+    failure), the window can no longer land off-screen. When no usable
+    taskbar rect is found it anchors to the screen bottom with a margin.
+  - Because `raise_window`'s off-screen recovery reuses this same
+    clamped position, `--top` and *Bring to Front* now reliably snap a
+    mis-positioned buddy back into view.
+
+[#1]: https://github.com/ramymagdy-rm/clawd-buddy/issues/1
+
 ## [0.1.21] - 2026-06-06
 
 ### Added — Milestone 7: multi-session aware
