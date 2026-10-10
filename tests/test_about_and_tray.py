@@ -32,10 +32,19 @@ class TestBuddyIcon:
     def test_icon_is_not_blank(self):
         img = about._make_buddy_icon_image()
         # If the procedural draw failed, every pixel would be fully
-        # transparent. Sample a known body pixel — the body is the
-        # rounded rect at (12,14)→(52,46), centre roughly (32, 30).
+        # transparent. Sample a known body pixel — the body spans
+        # (2,2)→(62,50), and (32, 30) sits between the eyes.
         px = img.getpixel((32, 30))
         assert px[3] > 0, "expected non-transparent body pixel"
+
+    def test_icon_fills_the_canvas(self):
+        # Windows shrinks the tray image to ~16-24px; padding baked into
+        # the 64px source makes the buddy look tiny next to other tray
+        # icons. The opaque silhouette must span (nearly) the full frame.
+        img = about._make_buddy_icon_image()
+        left, top, right, bottom = img.getchannel("A").getbbox()
+        assert right - left >= 58
+        assert bottom - top >= 58
 
 
 # ── About dialog reentrancy guard ────────────────────────────────────

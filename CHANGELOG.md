@@ -4,7 +4,7 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.1.22] - 2026-07-01
+## [0.1.22] - 2026-10-10
 
 ### Added
 
@@ -14,6 +14,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   Complements *Bring to Front* (which re-asserts z-order); centering
   uses the window's current size, so it stays centered at whatever scale
   (`Ctrl+2/3/4`) you're using.
+
+### Changed
+
+- **Bigger, sharper tray icon.** The buddy silhouette used only ~40×40
+  of its 64×64 canvas, so after Windows shrank it to tray size (~16–24px)
+  it looked noticeably smaller than neighbouring tray icons. It now fills
+  the frame (2px margin) and is drawn 4× oversized then downsampled, so
+  edges stay smooth at small sizes. The taskbar / Alt-Tab and About-dialog
+  icons share the same image and get the same improvement.
 
 ### Fixed
 
