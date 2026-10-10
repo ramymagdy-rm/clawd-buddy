@@ -96,19 +96,77 @@ def raise_window(handle):
         _impl._linux_setup_window(handle, topmost=True)
 
 
+def set_dpi_awareness():
+    """Make the GUI process DPI-aware so screen and taskbar coordinates
+    share a single physical pixel space.
+
+    Windows-only; a no-op that returns None elsewhere. Call exactly once,
+    before get_initial_position() and before any window is created — see
+    `_windows._win_set_dpi_awareness` for the full rationale (issue #1:
+    off-screen buddy on scaled Windows 11 displays)."""
+    if sys.platform == "win32":
+        return _impl._win_set_dpi_awareness()
+    return None
+
+
+def _compute_taskbar_anchored_position(scr_w, scr_h, bar_top, bar_valid):
+    """Pure geometry for the initial window placement — no ctypes, so it
+    can be unit-tested against DPI-virtualized numbers (issue #1).
+
+    Centers the window horizontally and sits it just above the taskbar
+    (`bar_top` is the taskbar's top edge in screen pixels), then clamps
+    the result fully on-screen. When no usable taskbar rect is available
+    (`bar_valid` False — auto-hidden bar, shell API failure, exotic
+    setup) it anchors to the screen bottom with a small margin instead.
+
+    The clamp is a deliberate second line of defence: even if DPI
+    awareness could not be applied and `bar_top` is a physical value that
+    overshoots a virtualized `scr_h`, the window still stays visible.
+    """
+    x = scr_w // 2 - WIN_W // 2
+    if bar_valid:
+        y = bar_top - WIN_H + 28
+    else:
+        y = scr_h - WIN_H - 20
+    # Never let the window drift off the top or bottom / left or right.
+    y = max(0, min(y, scr_h - WIN_H))
+    x = max(0, min(x, scr_w - WIN_W))
+    return x, y
+
+
+def center_window(handle):
+    """Move the window to the center of the primary screen.
+
+    Uses the window's *current* size (so it stays centered at whatever
+    scale the user picked) and the same coordinate space as
+    get_initial_position — after set_dpi_awareness that space is
+    physical pixels, so the math lines up on scaled displays too. Clamped
+    to non-negative in case the window is larger than the screen."""
+    _, _, ww, wh = get_window_rect(handle)
+    scr_w, scr_h = _get_screen_size()
+    x = max(0, (scr_w - ww) // 2)
+    y = max(0, (scr_h - wh) // 2)
+    move_window(handle, x, y)
+
+
 def get_initial_position():
     """Return (win_x, win_y) for the buddy window."""
     if sys.platform == "win32":
         scr_w, scr_h = _impl._win_get_screen_size()
-        _, tb_y, _, _ = _impl._win_get_taskbar_rect()
-        return scr_w // 2 - WIN_W // 2, tb_y - WIN_H + 28
+        _, tb_top, tb_w, tb_h = _impl._win_get_taskbar_rect()
+        # SHAppBarMessage yields (0,0,0,0) when it fails; a zero-height or
+        # top-aligned-at-0 rect isn't a usable "bottom taskbar" anchor.
+        tb_valid = tb_w > 0 and tb_h > 0 and tb_top > 0
+        return _compute_taskbar_anchored_position(
+            scr_w, scr_h, tb_top, tb_valid)
     if sys.platform == "linux":
         # Need display init for screen info
         pygame.display.init()
         info = pygame.display.Info()
         scr_w, scr_h = info.current_w, info.current_h
         panel_h = _impl._linux_get_panel_height(scr_h)
-        return scr_w // 2 - WIN_W // 2, scr_h - panel_h - WIN_H + 28
+        return _compute_taskbar_anchored_position(
+            scr_w, scr_h, scr_h - panel_h, True)
     return 0, 0
 
 

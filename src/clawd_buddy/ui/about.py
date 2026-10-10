@@ -81,19 +81,34 @@ def _make_buddy_icon_image():
     the buddy silhouette is the branding everywhere PIL is the right
     surface type. The pygame main window uses `make_buddy_icon_surface`
     below — same shape, different pixel container.
+
+    The silhouette is authored on a 40×40 grid (body + legs) and scaled
+    to fill the canvas with a 2px margin. Windows shrinks the tray image
+    to ~16–24px, so any padding baked into the 64px source makes the
+    buddy look tiny next to other tray icons. It's drawn 4× oversized
+    and LANCZOS-downsampled so edges stay antialiased at small sizes.
     """
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    size, ss, margin = 64, 4, 2
+    k = (size - 2 * margin) / 40 * ss  # design unit -> supersampled px
+
+    def p(x, y):
+        return (margin * ss + x * k, margin * ss + y * k)
+
+    def box(x0, y0, x1, y1):
+        return [*p(x0, y0), *p(x1, y1)]
+
+    img = Image.new("RGBA", (size * ss, size * ss), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([12, 14, 52, 46], radius=5, fill=(42, 42, 58))
-    d.rounded_rectangle([12, 14, 52, 22], radius=5, fill=(70, 70, 92))
-    d.ellipse([22, 28, 30, 36], fill=(230, 235, 255))
-    d.ellipse([34, 28, 42, 36], fill=(230, 235, 255))
-    d.line([(28, 40), (36, 40)], fill=(120, 130, 160), width=2)
-    d.line([(24, 46), (22, 54)], fill=(35, 35, 48), width=3)
-    d.line([(40, 46), (42, 54)], fill=(35, 35, 48), width=3)
-    return img
+    d.rounded_rectangle(box(0, 0, 40, 32), radius=5 * k, fill=(42, 42, 58))
+    d.rounded_rectangle(box(0, 0, 40, 8), radius=5 * k, fill=(70, 70, 92))
+    d.ellipse(box(10, 14, 18, 22), fill=(230, 235, 255))
+    d.ellipse(box(22, 14, 30, 22), fill=(230, 235, 255))
+    d.line([p(16, 26), p(24, 26)], fill=(120, 130, 160), width=round(2 * k))
+    d.line([p(12, 32), p(10, 40)], fill=(35, 35, 48), width=round(3 * k))
+    d.line([p(28, 32), p(30, 40)], fill=(35, 35, 48), width=round(3 * k))
+    return img.resize((size, size), Image.LANCZOS)
 
 
 def make_buddy_icon_surface():

@@ -373,6 +373,7 @@ class BuddyState:
         self.scale = 1.0
         self._scale_changed = False
         self._raise_requested = False
+        self._center_requested = False
         # Notification sound — queued from socket / tray / key threads and
         # consumed by the main loop so mixer.play() only runs on one thread.
         if sound_pack is None or sound_pack not in SOUND_PACK_CHOICES:
@@ -1077,6 +1078,12 @@ class BuddyState:
 
     def bring_to_front(self):
         self._raise_requested = True
+
+    def center_on_screen(self):
+        """Request a re-center to the middle of the screen. Like
+        `bring_to_front`, this just flips a flag the main loop drains so
+        the actual window move stays on the render thread."""
+        self._center_requested = True
 
     # ── Public action surface ────────────────────────────────────
     # Each of these is a thin wrapper around _request so callers don't

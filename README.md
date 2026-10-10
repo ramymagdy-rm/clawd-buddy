@@ -253,6 +253,8 @@ theme, so the override sticks for next time too. First-run default is `dark`.
 | **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | VBS in Startup folder |
 | **Linux (X11)** | Themed background (dark or light) | `_NET_WM_STATE_ABOVE` | `.desktop` in `~/.config/autostart/` |
 
+> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use `Ctrl+2/3/4` to enlarge it if you'd like it bigger.
+
 > **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px.
 
 ## Install
@@ -606,6 +608,7 @@ The buddy adds a system tray icon with a right-click menu:
 
 - **Test Celebration** — trigger the celebrate animation
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
+- **Center on Screen** — move the buddy to the middle of the screen (recovers a dragged-away or off-screen window)
 - **Theme** — pick one of the 8 themes (current one is checked)
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
@@ -736,6 +739,17 @@ clawd-buddy --no-topmost
 - **Windows**: Make sure no other process is using port `44556`: `netstat -ano | findstr 44556`
 - **Linux**: Requires an X11 session. If you're on Wayland, the buddy forces `SDL_VIDEODRIVER=x11` via XWayland. If it still doesn't appear, try `clawd-buddy --fg` to see errors in the terminal.
 - **macOS**: Not yet supported.
+
+### Windows: sound plays but the buddy is invisible
+
+Fixed in **0.1.22**. On earlier versions, a display scaled to 125–200%
+(the Windows 11 laptop default) could push the buddy off the bottom of
+the screen — the process was alive and played its sound, but the window
+was nowhere to be seen, and `--top` couldn't recover it. Upgrade with
+`uv tool upgrade clawd-buddy` (or `pipx upgrade clawd-buddy` / `pip
+install -U clawd-buddy`), then restart the buddy. On launch with `--fg`
+you should see a `[buddy] DPI awareness: per-monitor-v2` line
+confirming the fix is active.
 
 ### Hook doesn't trigger the buddy
 

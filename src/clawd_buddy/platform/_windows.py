@@ -61,8 +61,68 @@ user32.AttachThreadInput.argtypes = [
     ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.BOOL,
 ]
 user32.AttachThreadInput.restype = ctypes.wintypes.BOOL
+user32.SetProcessDPIAware.restype = ctypes.wintypes.BOOL
 kernel32 = ctypes.windll.kernel32
 kernel32.GetCurrentThreadId.restype = ctypes.wintypes.DWORD
+
+# Per-Monitor-v2 DPI awareness context (Win10 1703+). Passed as a
+# pointer-sized HANDLE — see _win_set_dpi_awareness for why this matters.
+DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+PROCESS_PER_MONITOR_DPI_AWARE = 2  # shcore SetProcessDpiAwareness value
+
+
+def _win_set_dpi_awareness():
+    """Declare this process DPI-aware, returning a short mode string
+    (or None if every attempt failed).
+
+    Windows 11 laptops default to 125–150% display scaling. Without
+    opting in, the process runs DPI-*virtualized*: GetSystemMetrics
+    reports a scaled-DOWN logical screen (e.g. 800px tall at 150% of a
+    1200px panel) while SHAppBarMessage keeps reporting the taskbar in
+    PHYSICAL pixels (top ~1152). get_initial_position() then computes a
+    y below the logical screen and the window lands off-screen — visible
+    nowhere, even though the process is alive and playing sounds
+    (issue #1). Declaring awareness makes every metric share one
+    physical pixel space, so the taskbar math lines up.
+
+    MUST be called before the first top-level window is created and
+    before any GetSystemMetrics / SHAppBarMessage call we rely on — DPI
+    awareness is a one-shot, process-wide setting that cannot be changed
+    once the process (or a library like SDL) has locked it in.
+
+    Best-effort with a graceful fallback ladder across Windows versions;
+    a failure here is never fatal — the clamp in get_initial_position()
+    is the second line of defence.
+    """
+    # Per-Monitor-v2 (Win10 1703+) — the modern, preferred context. The
+    # export is absent on older Windows, so attribute access can raise
+    # AttributeError; ctypes also defaults the arg to a 32-bit int, which
+    # truncates the -4 sentinel on 64-bit — pin argtypes to a HANDLE.
+    try:
+        fn = user32.SetProcessDpiAwarenessContext
+        fn.argtypes = [ctypes.wintypes.HANDLE]
+        fn.restype = ctypes.wintypes.BOOL
+        if fn(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+            return "per-monitor-v2"
+    except (AttributeError, OSError):
+        pass
+    # Per-Monitor (Win8.1+) via shcore — no v2 sub-modes but still makes
+    # the coordinate spaces consistent.
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(
+            PROCESS_PER_MONITOR_DPI_AWARE)
+        return "per-monitor"
+    except (AttributeError, OSError):
+        pass
+    # System-DPI aware (Vista+) — last resort. Single-monitor setups (the
+    # common case) get the same off-screen fix; only mixed-DPI multimon
+    # loses the per-monitor nicety.
+    try:
+        if user32.SetProcessDPIAware():
+            return "system"
+    except (AttributeError, OSError):
+        pass
+    return None
 
 class APPBARDATA(ctypes.Structure):
     _fields_ = [
