@@ -90,6 +90,9 @@ def _create_tray_impl(state):
     def on_bring_to_front(_icon, _item):
         state.bring_to_front()
 
+    def on_center(_icon, _item):
+        state.center_on_screen()
+
     def on_about(_icon, _item):
         # M4: pass state so the About dialog's Reminders tab can read
         # and mutate it. Older callers (tests) can still call
@@ -277,6 +280,7 @@ def _create_tray_impl(state):
         ),
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),
+        pystray.MenuItem("Center on Screen", on_center),
         pystray.MenuItem("Theme", theme_submenu),
         pystray.MenuItem("Sound", sound_submenu),
         pystray.MenuItem(
