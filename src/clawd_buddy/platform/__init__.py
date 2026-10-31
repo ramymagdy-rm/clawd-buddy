@@ -109,6 +109,34 @@ def set_dpi_awareness():
     return None
 
 
+def prepare_window_transparency():
+    """Request a window that can carry per-pixel alpha.
+
+    Linux-only; call once before the window is created. Returns a short
+    description for the startup log, or None when per-pixel alpha isn't
+    available (no compositor, no 32-bit visual, a non-X11 SDL driver, or
+    Windows, which uses colour-key transparency instead). See
+    `_linux._linux_prepare_argb_window` for why the Linux window used to
+    show a black rectangle around the buddy."""
+    if sys.platform == "linux":
+        return _impl._linux_prepare_argb_window()
+    return None
+
+
+def window_has_alpha(screen):
+    """True when the display surface really has an alpha channel, i.e.
+    `prepare_window_transparency` worked and the frame should be painted
+    on a transparent background instead of the theme's `bg_fill`.
+
+    This checks the surface itself instead of trusting the request, so
+    any SDL build or X server that ignores the request falls back to the
+    old opaque background. Always False on Windows, which keeps its
+    colour-key path."""
+    if sys.platform != "linux":
+        return False
+    return screen.get_masks()[3] != 0
+
+
 def _compute_taskbar_anchored_position(scr_w, scr_h, bar_top, bar_valid):
     """Pure geometry for the initial window placement — no ctypes, so it
     can be unit-tested against DPI-virtualized numbers (issue #1).
@@ -186,15 +214,19 @@ def resize_window(handle, scale, topmost):
     return screen, handle
 
 
-def get_bg_fill(theme_name):
+def get_bg_fill(theme_name, transparent=False):
     """Background fill for the window surface each frame.
 
     Windows uses color-key transparency, so the background is painted
-    in `TKEY` and becomes invisible. X11 has no color-key, so we paint
-    the theme's `bg_fill` to blend with the panel.
+    in `TKEY` and becomes invisible. On Linux with an ARGB window
+    (`transparent`, from `window_has_alpha`) the background is fully
+    transparent. X11 has no colour-key, so without a compositor we paint
+    the theme's `bg_fill` and hope it blends with the panel.
     """
     if sys.platform == "win32":
         return TKEY
+    if transparent:
+        return (0, 0, 0, 0)
     theme = THEMES.get(theme_name, THEMES["dark"])
     return theme.get("bg_fill", (1, 1, 1))
 
