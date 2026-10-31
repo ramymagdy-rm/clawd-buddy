@@ -4,6 +4,43 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.24] - 2026-10-31
+
+### Fixed
+
+- **Tray icon had no right-click menu on Linux.** pystray chooses its
+  Linux backend at import time. Its menu-capable backends (AppIndicator,
+  GTK) need PyGObject (`gi`), which isn't installed in a `uv tool`,
+  `pipx` or pip venv and can't easily be built there. So pystray fell back
+  to its `xorg` backend, which declares `HAS_MENU = False`: the icon
+  showed up in the panel, but clicking it did nothing, and every
+  tray-only setting (theme, sound, volume, quiet hours, reduce motion,
+  reminders, About, Quit) was out of reach.
+  - New `ui/sni.py` backend publishes the icon as a freedesktop
+    **StatusNotifierItem** and its menu over **com.canonical.dbusmenu**,
+    the protocols GNOME (AppIndicator extension, on by default in Ubuntu),
+    KDE Plasma, Xfce, Cinnamon and others use for tray icons. The panel
+    draws the menu natively, with checkmarks, radio groups, submenus and
+    the disabled version label.
+  - It is driven by the same `pystray.Menu` that `tray.py` already
+    defines, so the menu is still declared once for all platforms.
+    Menu ids are keyed by item, so they stay stable when items like
+    *I drank water* or *Stop Pomodoro* appear and disappear. The menu is
+    re-checked every second and the panel is told when it changes.
+  - Uses **jeepney** (pure Python, no compiled code, no `gi`), added as
+    a Linux-only dependency.
+  - Chosen automatically only when pystray's backend can't show a menu
+    and a StatusNotifierItem host is running. A menu-capable pystray
+    backend (e.g. a system PyGObject), an explicit `PYSTRAY_BACKEND`, and
+    Windows are all left unchanged. `--fg` logs which tray is in use.
+  - Re-registers automatically if the panel restarts (GNOME Shell reload,
+    extension toggled).
+  - Verified on Ubuntu 26.04 / GNOME 50 with the real app. The watcher
+    accepts the item, and GNOME Shell calls `GetAll`, `GetLayout`,
+    `GetGroupProperties` and `AboutToShow`. Clicks over D-Bus toggle
+    Reduce Motion, switch themes and quit, with checkmarks updating
+    afterwards. The panel drops the icon about 0.5 s after Quit.
+
 ## [0.1.23] - 2026-10-31
 
 ### Fixed
