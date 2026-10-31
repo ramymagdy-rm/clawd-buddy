@@ -11,9 +11,11 @@ new themes by adding an entry to `THEMES` with the same set of keys.
 keep it in sync with `THEMES` (Python preserves insertion order for
 dicts since 3.7, so iterating `THEMES.keys()` gives the same order).
 
-The Linux `bg_fill` key is the window background fill since X11 cannot
-do color-key transparency — pick a colour that visually disappears
-against the surrounding panel/dock.
+The Linux `bg_fill` key is the window background fill used only when the
+window can't be made transparent (X11 without a compositing manager — see
+`platform._linux._linux_prepare_argb_window`). X11 has no colour-key
+transparency, so pick a colour that visually disappears against the
+surrounding panel/dock.
 """
 
 # Ordered list of themes — also the display order in the

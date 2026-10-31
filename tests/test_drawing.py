@@ -289,3 +289,82 @@ class TestWorkspaceBadge:
         self._make_visible(state)
         state.set_reduce_motion(True)
         drawing.draw_buddy(surface, 1000.0, state, blink=False)
+
+
+# ── Transparent-window compositing (Linux ARGB) ──────────────────────
+class TestTransparentBackground:
+    """On Linux with a compositor the window has a real alpha channel;
+    the background must stay fully clear so no rectangle shows around
+    the buddy."""
+
+    def _alpha(self, surf, pos):
+        return surf.get_at(pos).a
+
+    def test_draw_buddy_leaves_background_clear(self, state):
+        surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        surf.fill((0, 0, 0, 0))
+        drawing.draw_buddy(surf, 1000.0, state, blink=False)
+        for corner in [(0, 0), (WIN_W - 1, 0),
+                       (0, WIN_H - 1), (WIN_W - 1, WIN_H - 1)]:
+            assert self._alpha(surf, corner) == 0
+        # ...while the body itself is solid.
+        assert self._alpha(surf, (WIN_W // 2, WIN_H - 100)) == 255
+
+    def test_every_mode_keeps_corners_clear(self, state):
+        surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        for action in ("trigger", "wave", "greet", "start_thinking"):
+            getattr(state, action)()
+            surf.fill((0, 0, 0, 0))
+            drawing.draw_buddy(surf, 1000.0, state, blink=False)
+            assert self._alpha(surf, (0, 0)) == 0
+            assert self._alpha(surf, (WIN_W - 1, 0)) == 0
+
+
+class TestComposeFrame:
+    def _frame(self, size=(10, 10)):
+        """Clear frame with one opaque and one half-transparent pixel."""
+        frame = pygame.Surface(size, pygame.SRCALPHA)
+        frame.fill((0, 0, 0, 0))
+        frame.fill((200, 100, 50, 255), (0, 0, 5, 5))
+        frame.set_at((8, 8), (200, 100, 50, 128))
+        return frame
+
+    def test_opaque_mode_is_a_plain_copy(self):
+        screen = pygame.Surface((10, 10))
+        frame = pygame.Surface((10, 10))
+        frame.fill((30, 60, 90))
+        drawing.compose_frame(screen, frame, transparent=False)
+        assert screen.get_at((5, 5))[:3] == (30, 60, 90)
+
+    def test_transparent_mode_writes_premultiplied_alpha(self):
+        # X11 compositors read alpha as premultiplied: RGB must be
+        # scaled by alpha or semi-transparent pixels glow too bright.
+        screen = pygame.Surface((10, 10), pygame.SRCALPHA)
+        drawing.compose_frame(screen, self._frame(), transparent=True)
+        assert tuple(screen.get_at((2, 2))) == (200, 100, 50, 255)
+        r, g, b, a = screen.get_at((8, 8))
+        assert a == 128
+        assert (r, g, b) == pytest.approx((100, 50, 25), abs=1)
+        assert tuple(screen.get_at((9, 0))) == (0, 0, 0, 0)
+
+    def test_transparent_mode_clears_previous_frame(self):
+        # Leftovers from the last frame must not show through clear
+        # pixels (the buddy bobs, so pixels move every frame).
+        screen = pygame.Surface((10, 10), pygame.SRCALPHA)
+        screen.fill((255, 255, 255, 255))
+        drawing.compose_frame(screen, self._frame(), transparent=True)
+        assert tuple(screen.get_at((9, 0))) == (0, 0, 0, 0)
+
+    def test_transparent_mode_scales_to_window(self):
+        # Ctrl+2..4: frame is drawn at native size and scaled up.
+        screen = pygame.Surface((20, 20), pygame.SRCALPHA)
+        drawing.compose_frame(screen, self._frame(), transparent=True)
+        assert tuple(screen.get_at((3, 3))) == (200, 100, 50, 255)
+        assert tuple(screen.get_at((19, 0))) == (0, 0, 0, 0)
+
+    def test_opaque_mode_scales_to_window(self):
+        screen = pygame.Surface((20, 20))
+        frame = pygame.Surface((10, 10))
+        frame.fill((30, 60, 90))
+        drawing.compose_frame(screen, frame, transparent=False)
+        assert screen.get_at((19, 19))[:3] == (30, 60, 90)

@@ -80,15 +80,17 @@ from .platform import (
     get_window_handle,
     get_window_rect,
     move_window,
+    prepare_window_transparency,
     raise_window,
     resize_window,
     set_dpi_awareness,
     setup_window,
+    window_has_alpha,
 )
 from . import history
 from .state import BuddyState
 from .ui.about import make_buddy_icon_surface
-from .ui.drawing import draw_buddy
+from .ui.drawing import compose_frame, draw_buddy
 from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
 from .ui.tray import create_tray
 
@@ -255,6 +257,13 @@ def main():
     if mode:
         print(f"[buddy] DPI awareness: {mode}")
 
+    # Linux: request a 32-bit ARGB window so the background is truly
+    # transparent instead of a solid rectangle around the buddy. Must
+    # run before the window is created; no-op on Windows.
+    alpha_mode = prepare_window_transparency()
+    if alpha_mode:
+        print(f"[buddy] Transparency: {alpha_mode}")
+
     # Compute initial window position (may init display subsystem)
     win_x, win_y = get_initial_position()
     os.environ["SDL_VIDEO_WINDOW_POS"] = f"{win_x},{win_y}"
@@ -326,8 +335,13 @@ def main():
     if args.test:
         state.trigger()
 
-    # Base surface — always draw at native resolution, then scale to window
-    base_surf = pygame.Surface((WIN_W, WIN_H))
+    # Base surface — always draw at native resolution, then scale to window.
+    # It carries per-pixel alpha only when the window does (Linux ARGB);
+    # otherwise the background is an opaque colour (Windows colour-key
+    # or the theme's bg_fill).
+    transparent = window_has_alpha(screen)
+    base_surf = pygame.Surface(
+        (WIN_W, WIN_H), pygame.SRCALPHA if transparent else 0)
 
     # Background threads
     threading.Thread(target=socket_listener, args=(state, port),
@@ -473,15 +487,9 @@ def main():
         is_blink = phase > blink_interval - blink_dur
 
         # Draw at base resolution, then scale up
-        base_surf.fill(get_bg_fill(state.theme_name))
+        base_surf.fill(get_bg_fill(state.theme_name, transparent))
         draw_buddy(base_surf, t, state, is_blink)
-
-        if state.scale == 1.0:
-            screen.blit(base_surf, (0, 0))
-        else:
-            scaled = pygame.transform.smoothscale(
-                base_surf, screen.get_size())
-            screen.blit(scaled, (0, 0))
+        compose_frame(screen, base_surf, transparent)
         pygame.display.flip()
 
     pygame.quit()

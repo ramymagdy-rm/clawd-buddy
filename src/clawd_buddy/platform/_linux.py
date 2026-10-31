@@ -52,6 +52,23 @@ class _XEvent(ctypes.Union):
         ("_pad", ctypes.c_long * 24),
     ]
 
+class _XVisualInfo(ctypes.Structure):
+    """Mirror of Xlib's XVisualInfo (filled in by XMatchVisualInfo)."""
+    _fields_ = [
+        ("visual", ctypes.c_void_p),
+        ("visualid", ctypes.c_ulong),
+        ("screen", ctypes.c_int),
+        ("depth", ctypes.c_int),
+        ("c_class", ctypes.c_int),
+        ("red_mask", ctypes.c_ulong),
+        ("green_mask", ctypes.c_ulong),
+        ("blue_mask", ctypes.c_ulong),
+        ("colormap_size", ctypes.c_int),
+        ("bits_per_rgb", ctypes.c_int),
+    ]
+
+_TRUE_COLOR = 4  # Xlib visual class constant
+
 def _linux_init_x11():
     """Initialize X11 ctypes bindings (lazy, called once)."""
     global _x11, _x11_display
@@ -109,6 +126,18 @@ def _linux_init_x11():
         ]
         _x11.XChangeProperty.restype = ctypes.c_int
 
+        _x11.XDefaultScreen.argtypes = [ctypes.c_void_p]
+        _x11.XDefaultScreen.restype = ctypes.c_int
+
+        _x11.XMatchVisualInfo.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(_XVisualInfo),
+        ]
+        _x11.XMatchVisualInfo.restype = ctypes.c_int
+
+        _x11.XGetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        _x11.XGetSelectionOwner.restype = ctypes.c_ulong
+
         _x11_display = _x11.XOpenDisplay(None)
         if not _x11_display:
             _x11 = None
@@ -120,6 +149,66 @@ def _linux_init_x11():
 
 def _linux_get_window_id():
     return pygame.display.get_wm_info().get("window", 0)
+
+def _linux_compositor_running():
+    """True when a compositing manager owns the _NET_WM_CM_Sn selection.
+
+    Only a compositor honours a window's alpha channel; without one an
+    ARGB window's transparent pixels render as solid black."""
+    if not _linux_init_x11():
+        return False
+    screen = _x11.XDefaultScreen(_x11_display)
+    atom = _x11.XInternAtom(
+        _x11_display, f"_NET_WM_CM_S{screen}".encode(), 0)
+    return _x11.XGetSelectionOwner(_x11_display, atom) != 0
+
+def _linux_find_argb_visual():
+    """Return the id of a 32-bit TrueColor (ARGB) visual, or None."""
+    if not _linux_init_x11():
+        return None
+    vinfo = _XVisualInfo()
+    screen = _x11.XDefaultScreen(_x11_display)
+    if not _x11.XMatchVisualInfo(
+            _x11_display, screen, 32, _TRUE_COLOR, ctypes.byref(vinfo)):
+        return None
+    return vinfo.visualid
+
+def _linux_prepare_argb_window():
+    """Ask SDL for a window with a real alpha channel. Must run before
+    the window is created. Returns a short description for the startup
+    log, or None when per-pixel alpha isn't available.
+
+    X11 has no colour-key transparency like Win32's LWA_COLORKEY, so
+    the window background used to be painted with the theme's `bg_fill`.
+    That only blends in on a matching panel; on GNOME (Ubuntu 22.04+,
+    Wayland via XWayland) the buddy sits over the desktop instead, so you
+    see a black rectangle around it. A 32-bit ARGB visual plus a
+    compositor gives true per-pixel transparency instead.
+
+    Two SDL settings are needed, both read from the environment:
+      * SDL_VIDEO_X11_WINDOW_VISUALID makes SDL create the window with
+        the ARGB visual instead of the default 24-bit one.
+      * SDL_FRAMEBUFFER_ACCELERATION=0 makes the window surface use the
+        native X11 framebuffer, whose pixel format follows the window's
+        visual (ARGB8888). The default OpenGL-texture framebuffer always
+        picks a format with no alpha, so the window would stay opaque.
+
+    `setdefault` keeps any value the user exported themselves. Whether
+    it actually worked is checked afterwards from the display surface's
+    alpha mask (see `platform.window_has_alpha`), so a failure here just
+    leaves the old opaque `bg_fill` background.
+    """
+    if os.environ.get("SDL_VIDEODRIVER", "x11") != "x11":
+        return None
+    if not _linux_compositor_running():
+        return None
+    visual = _linux_find_argb_visual()
+    if visual is None:
+        return None
+    os.environ.setdefault("SDL_VIDEO_X11_WINDOW_VISUALID", hex(visual))
+    os.environ.setdefault("SDL_FRAMEBUFFER_ACCELERATION", "0")
+    return (f"per-pixel alpha "
+            f"(visual {os.environ['SDL_VIDEO_X11_WINDOW_VISUALID']})")
 
 def _linux_get_panel_height(scr_h):
     """Detect panel/dock height via _NET_WORKAREA. Falls back to 48px."""
