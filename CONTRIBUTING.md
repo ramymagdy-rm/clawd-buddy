@@ -84,7 +84,7 @@ clawd-buddy/
 │   └── platform/
 │       ├── __init__.py    # Cross-platform facade
 │       ├── _windows.py    # Win32 ctypes (transparency, taskbar, autostart)
-│       └── _linux.py      # X11 / XDG (window props, panel, .desktop)
+│       └── _linux.py      # X11 / XDG (window props, ARGB transparency, panel, .desktop)
 ├── tests/                 # One test file per module
 ├── .claude/
 │   ├── settings.json      # Claude Code hook definitions
