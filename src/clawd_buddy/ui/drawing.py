@@ -185,6 +185,34 @@ def rounded_rect(surf, color, rect, r):
         pygame.draw.circle(surf, color, (cx, cy), r)
 
 
+def compose_frame(screen, frame, transparent):
+    """Copy the base-resolution `frame` onto the window surface `screen`,
+    scaling it to the window size (Ctrl+2/3/4) when they differ.
+
+    Opaque mode (Windows colour-key, Linux without a compositor) is a
+    plain blit. Transparent mode (Linux ARGB window) needs two extra
+    steps:
+      * X11 compositors read a window's alpha as *premultiplied*, so the
+        frame is premultiplied first. Without this, the semi-transparent
+        attention border and thinking dots would look too bright. Scaling
+        after premultiplying also keeps smoothscale from pulling dark
+        fringes in from the (0, 0, 0, 0) background.
+      * The screen is cleared to (0, 0, 0, 0) before blitting, so the
+        BLEND_PREMULTIPLIED blit copies the frame's pixels exactly instead
+        of mixing them with the previous frame.
+    """
+    if transparent:
+        frame = frame.premul_alpha()
+    size = screen.get_size()
+    if frame.get_size() != size:
+        frame = pygame.transform.smoothscale(frame, size)
+    if transparent:
+        screen.fill((0, 0, 0, 0))
+        screen.blit(frame, (0, 0), special_flags=pygame.BLEND_PREMULTIPLIED)
+    else:
+        screen.blit(frame, (0, 0))
+
+
 def draw_buddy(surf, t, state, blink):
     """Render the buddy for the current frame.
 

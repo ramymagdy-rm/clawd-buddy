@@ -30,6 +30,8 @@ class TestFacadeExports:
         "resize_window",
         "center_window",
         "get_bg_fill",
+        "prepare_window_transparency",
+        "window_has_alpha",
         "set_dpi_awareness",
         "enable_startup",
         "disable_startup",
@@ -87,6 +89,100 @@ class TestBgFill:
         # Unknown theme name falls back to "dark"'s bg_fill — matches
         # the facade's defensive default.
         assert plat.get_bg_fill("no-such-theme") == THEMES["dark"]["bg_fill"]
+
+    def test_linux_transparent_window_gets_clear_background(self, monkeypatch):
+        # With an ARGB window the background must be fully transparent
+        # for every theme — painting bg_fill there is exactly the black
+        # rectangle this replaces.
+        monkeypatch.setattr(plat.sys, "platform", "linux")
+        from clawd_buddy.ui.themes import THEMES
+
+        for name in THEMES:
+            assert plat.get_bg_fill(name, transparent=True) == (0, 0, 0, 0)
+
+    def test_windows_ignores_transparent_flag(self, monkeypatch):
+        # Windows' colour-key needs TKEY even if a caller passes True.
+        monkeypatch.setattr(plat.sys, "platform", "win32")
+        assert plat.get_bg_fill("dark", transparent=True) == TKEY
+
+
+# ── Per-pixel alpha (Linux ARGB window) ──────────────────────────────
+class TestWindowHasAlpha:
+    def test_true_for_alpha_surface_on_linux(self, monkeypatch):
+        import pygame
+        monkeypatch.setattr(plat.sys, "platform", "linux")
+        assert plat.window_has_alpha(
+            pygame.Surface((4, 4), pygame.SRCALPHA)) is True
+
+    def test_false_for_opaque_surface_on_linux(self, monkeypatch):
+        # The fallback: SDL ignored the ARGB request (no compositor,
+        # GL framebuffer...), so the window surface has no alpha mask.
+        import pygame
+        monkeypatch.setattr(plat.sys, "platform", "linux")
+        assert plat.window_has_alpha(pygame.Surface((4, 4))) is False
+
+    def test_always_false_on_windows(self, monkeypatch):
+        import pygame
+        monkeypatch.setattr(plat.sys, "platform", "win32")
+        assert plat.window_has_alpha(
+            pygame.Surface((4, 4), pygame.SRCALPHA)) is False
+
+
+class TestPrepareWindowTransparency:
+    """`_linux_prepare_argb_window` only sets two SDL env vars; the X11
+    queries behind it are patched out so this runs on any machine."""
+
+    @pytest.fixture
+    def linux(self, monkeypatch):
+        from clawd_buddy.platform import _linux
+        # conftest forces the dummy driver; the real app runs on x11.
+        monkeypatch.setenv("SDL_VIDEODRIVER", "x11")
+        monkeypatch.delenv("SDL_VIDEO_X11_WINDOW_VISUALID", raising=False)
+        monkeypatch.delenv("SDL_FRAMEBUFFER_ACCELERATION", raising=False)
+        monkeypatch.setattr(_linux, "_linux_compositor_running", lambda: True)
+        monkeypatch.setattr(_linux, "_linux_find_argb_visual", lambda: 0x72)
+        return _linux
+
+    def test_requests_argb_visual_and_native_framebuffer(self, linux):
+        import os
+        result = linux._linux_prepare_argb_window()
+        assert "0x72" in result
+        assert os.environ["SDL_VIDEO_X11_WINDOW_VISUALID"] == "0x72"
+        # Without this SDL draws through a GL texture with no alpha.
+        assert os.environ["SDL_FRAMEBUFFER_ACCELERATION"] == "0"
+
+    def test_no_compositor_keeps_opaque_window(self, linux, monkeypatch):
+        # Without a compositor the alpha channel is ignored and clear
+        # pixels show black — worse than a themed bg_fill.
+        import os
+        monkeypatch.setattr(
+            linux, "_linux_compositor_running", lambda: False)
+        assert linux._linux_prepare_argb_window() is None
+        assert "SDL_VIDEO_X11_WINDOW_VISUALID" not in os.environ
+        assert "SDL_FRAMEBUFFER_ACCELERATION" not in os.environ
+
+    def test_no_argb_visual_keeps_opaque_window(self, linux, monkeypatch):
+        import os
+        monkeypatch.setattr(linux, "_linux_find_argb_visual", lambda: None)
+        assert linux._linux_prepare_argb_window() is None
+        assert "SDL_VIDEO_X11_WINDOW_VISUALID" not in os.environ
+
+    def test_non_x11_driver_is_left_alone(self, linux, monkeypatch):
+        # A user forcing SDL_VIDEODRIVER=wayland gets no X11 visual hacks.
+        monkeypatch.setenv("SDL_VIDEODRIVER", "wayland")
+        assert linux._linux_prepare_argb_window() is None
+
+    def test_user_exported_values_win(self, linux, monkeypatch):
+        import os
+        monkeypatch.setenv("SDL_FRAMEBUFFER_ACCELERATION", "opengl")
+        linux._linux_prepare_argb_window()
+        assert os.environ["SDL_FRAMEBUFFER_ACCELERATION"] == "opengl"
+
+    def test_facade_is_noop_off_linux(self, monkeypatch):
+        monkeypatch.setattr(plat.sys, "platform", "win32")
+        assert plat.prepare_window_transparency() is None
+        monkeypatch.setattr(plat.sys, "platform", "haiku")
+        assert plat.prepare_window_transparency() is None
 
 
 # ── Stub paths return safe defaults ──────────────────────────────────

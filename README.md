@@ -251,11 +251,11 @@ theme, so the override sticks for next time too. First-run default is `dark`.
 | Platform | Transparency | Always-on-top | Autostart |
 | --- | --- | --- | --- |
 | **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | VBS in Startup folder |
-| **Linux (X11)** | Themed background (dark or light) | `_NET_WM_STATE_ABOVE` | `.desktop` in `~/.config/autostart/` |
+| **Linux (X11 / XWayland)** | Per-pixel alpha with a compositor (fully transparent background); themed background without one | `_NET_WM_STATE_ABOVE` | `.desktop` in `~/.config/autostart/` |
 
 > **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use `Ctrl+2/3/4` to enlarge it if you'd like it bigger.
 
-> **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px.
+> **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px. When a compositing manager is running (GNOME, KDE, Xfce with compositing, picom…), the window uses a 32-bit ARGB visual, so the background is truly transparent. This sets `SDL_VIDEO_X11_WINDOW_VISUALID` and `SDL_FRAMEBUFFER_ACCELERATION=0` automatically.
 
 ## Install
 
@@ -479,7 +479,7 @@ src/clawd_buddy/
 └── platform/
     ├── __init__.py # cross-platform facade
     ├── _windows.py # Win32 ctypes (transparency, taskbar, autostart)
-    └── _linux.py   # X11 / XDG (window props, panel detection, .desktop)
+    └── _linux.py   # X11 / XDG (window props, ARGB transparency, panel detection, .desktop)
 ```
 
 Each module is independently importable and unit-tested (`tests/`).
@@ -776,9 +776,28 @@ confirming the fix is active.
 - Re-run `clawd-buddy --startup` to regenerate it.
 - Make sure `clawd-buddy` is on your PATH: `which clawd-buddy`
 
-### Linux: window has a visible background
+### Linux: black (or coloured) rectangle around the buddy
 
-On Linux, color-key transparency is not available. The buddy renders on a themed background that matches whichever of the 8 themes you choose. Pick a light theme (`light`, `solarized`, `sunset`) on light panels/docks, or a dark one (`dark`, `dracula`, `monokai`, `nord`, `gruvbox`) on dark ones to blend in.
+Fixed in **0.1.23**. Earlier versions always painted an opaque themed
+background behind the buddy on Linux, which showed as a black rectangle on
+GNOME / Ubuntu where there's no panel behind the window. The buddy now
+uses a transparent ARGB window whenever a compositing manager is running.
+Upgrade with `uv tool upgrade clawd-buddy` (or `pipx upgrade clawd-buddy` /
+`pip install -U clawd-buddy`), then restart the buddy
+(`clawd-buddy --quit && clawd-buddy`). Run with `--fg` to confirm: you
+should see `[buddy] Transparency: per-pixel alpha (visual 0x…)`.
+
+If that line is missing, the buddy fell back to the themed background:
+
+- **No compositor running** (e.g. a bare i3/Openbox session). Without
+  one, transparent pixels would render solid black, so the buddy paints the
+  theme's background instead. Start a compositor such as `picom`, or pick
+  a theme that blends with your panel: a light theme (`light`, `solarized`,
+  `sunset`) on light panels/docks, or a dark one (`dark`, `dracula`,
+  `monokai`, `nord`, `gruvbox`) on dark ones.
+- **You exported `SDL_VIDEODRIVER`** to something other than `x11`, or set
+  `SDL_FRAMEBUFFER_ACCELERATION` / `SDL_VIDEO_X11_WINDOW_VISUALID` yourself.
+  The buddy respects your values, so unset them to get transparency back.
 
 ## Disclaimer
 

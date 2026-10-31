@@ -4,6 +4,45 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.23] - 2026-10-31
+
+### Fixed
+
+- **Black rectangle around the buddy on Linux (Ubuntu / GNOME).** X11
+  has no colour-key transparency like Windows' `LWA_COLORKEY`, so the
+  Linux window was an opaque 200×260 box painted with the theme's
+  `bg_fill`. The idea was that it would blend into a dark panel. On
+  GNOME (Ubuntu 22.04+, including 26.04 on Wayland via XWayland) there
+  is no panel behind the buddy, only the desktop, so a solid black
+  rectangle (or a coloured one for other themes) showed around it.
+  - The window is now created with a **32-bit ARGB visual** whenever a
+    compositing manager is running (`_NET_WM_CM_Sn` has an owner, which
+    is always the case for XWayland under GNOME Shell / Mutter and for
+    KDE, Xfce with compositing, picom, etc.). The background is cleared
+    to fully transparent each frame, so only the buddy itself is drawn.
+  - Two SDL settings make this work, and both are set automatically
+    before the window is created:
+    `SDL_VIDEO_X11_WINDOW_VISUALID` picks the ARGB visual, and
+    `SDL_FRAMEBUFFER_ACCELERATION=0` makes SDL use the native X11
+    framebuffer. Without the second one, SDL draws through an OpenGL
+    texture whose format has no alpha, and the window stays opaque even
+    with the right visual. Values you export yourself are respected.
+  - Frames are **premultiplied** before reaching the window, because X11
+    compositors read the alpha channel as premultiplied. This keeps the
+    semi-transparent attention border, `!` and thinking dots at the
+    right brightness. It also means `Ctrl+2/3/4` scaling has no dark
+    fringes.
+  - **Graceful fallback:** the app checks the window surface it actually
+    got, not just what it asked for. With no compositor, no 32-bit
+    visual, or a non-X11 SDL driver, the buddy keeps the previous
+    themed `bg_fill` background. A compositor-less ARGB window would
+    show solid black, which is worse. Windows is unchanged (colour-key).
+  - Launching with `--fg` prints `[buddy] Transparency: per-pixel alpha
+    (visual 0x…)` when the transparent window is active.
+  - Known limitation: the transparent area around the buddy still
+    receives mouse clicks (as the opaque box did before), so you can't
+    click *through* it to whatever is underneath.
+
 ## [0.1.22] - 2026-10-10
 
 ### Added
