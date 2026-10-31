@@ -4,6 +4,34 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`/release` for maintainers (Claude Code skill).** One command takes a
+  release from `develop` to PyPI, which is where pip, pipx and `uv tool`
+  install from. It works out what's left to do, so a half-finished
+  release (for example tagged but never uploaded) carries on instead of
+  starting over. It bumps the version and dates the CHANGELOG, runs the
+  tests, merges into `main` and tags. It builds the wheel and sdist from a
+  clean checkout of the tag and verifies them: every module present,
+  metadata, dependencies, entry points, `twine check`, and an isolated
+  `clawd-buddy --version`. Then it asks once before pushing, publishing
+  with `uv publish`, creating the GitHub release and confirming that pip
+  and uv can install the new version. `/release status` only reports.
+  The skill lives in `.claude/skills/release/`, its helper is
+  `scripts/release_tool.py`, and the decisions it makes are tested in
+  `tests/test_release_tool.py`.
+
+### Fixed
+
+- **Release builds could pick up untracked files.** The documented
+  `uv build` ran in the working tree, and hatchling packs every file that
+  isn't gitignored into the sdist, so local scratch files could ship to
+  PyPI. Releases are now built from a clean checkout of the tag, and the
+  sdist is checked against the tag's file list. `CONTRIBUTING.md` is
+  updated to match.
+
 ## [0.1.24] - 2026-10-31
 
 ### Fixed

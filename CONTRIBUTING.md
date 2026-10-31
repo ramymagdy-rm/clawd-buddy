@@ -149,6 +149,13 @@ Each module is focused and independently testable. See
 
 ## Releasing
 
+In Claude Code, **`/release`** runs everything below
+(`.claude/skills/release/`). It works out what's left to do, builds and
+verifies the package from the tag, and then asks once before pushing and
+publishing. `/release status` only reports where the release stands. It
+picks up a half-finished release too, such as one that was tagged but never
+uploaded. The manual steps:
+
 ### 1. Bump the version
 
 The project version lives in `pyproject.toml` under `[project] version` and
@@ -192,10 +199,30 @@ git push origin v0.1.10
 ### 4. Publish to PyPI
 
 ```bash
-rm -r dist; uv build && uv publish
+python .claude/skills/release/scripts/release_tool.py build 0.1.10
+python .claude/skills/release/scripts/release_tool.py verify-dist 0.1.10
+uv publish --check-url https://pypi.org/simple/
 ```
 
-`uv build` produces the wheel and sdist in `dist/`; `uv publish` uploads both to PyPI. Make sure your `UV_PUBLISH_TOKEN` (or `~/.pypirc`) is configured.
+`build` makes the wheel and sdist in `dist/` from a clean checkout of the
+`v0.1.10` tag. Don't run a plain `uv build` in your working tree, because
+hatchling packs every file that isn't gitignored into the sdist, untracked
+ones included. `verify-dist` checks that both files are complete and hold
+nothing that isn't in the tag. `uv publish` uploads them; `--check-url`
+makes a retry after a partial upload safe. Make sure your
+`UV_PUBLISH_TOKEN` (or `~/.pypirc`) is configured.
+
+PyPI never accepts the same version twice, even after deleting it. If a
+release is broken, ship a new patch version.
+
+pip, pipx and uv all install from PyPI, so this one upload reaches all of
+them. Then create the GitHub release with the CHANGELOG section as its body
+and the two files attached:
+
+```bash
+gh release create v0.1.10 dist/clawd_buddy-0.1.10-py3-none-any.whl dist/clawd_buddy-0.1.10.tar.gz \
+  --title v0.1.10 --notes-file "$(python .claude/skills/release/scripts/release_tool.py notes 0.1.10)" --verify-tag
+```
 
 ## Guidelines
 
