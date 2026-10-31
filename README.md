@@ -248,10 +248,10 @@ theme, so the override sticks for next time too. First-run default is `dark`.
 
 ## Platform support
 
-| Platform | Transparency | Always-on-top | Autostart |
-| --- | --- | --- | --- |
-| **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | VBS in Startup folder |
-| **Linux (X11 / XWayland)** | Per-pixel alpha with a compositor (fully transparent background); themed background without one | `_NET_WM_STATE_ABOVE` | `.desktop` in `~/.config/autostart/` |
+| Platform | Transparency | Always-on-top | Tray menu | Autostart |
+| --- | --- | --- | --- | --- |
+| **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | Notification-area icon (pystray) | VBS in Startup folder |
+| **Linux (X11 / XWayland)** | Per-pixel alpha with a compositor (fully transparent background); themed background without one | `_NET_WM_STATE_ABOVE` | StatusNotifierItem over D-Bus (GNOME needs the AppIndicator extension, which Ubuntu enables by default) | `.desktop` in `~/.config/autostart/` |
 
 > **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use `Ctrl+2/3/4` to enlarge it if you'd like it bigger.
 
@@ -475,7 +475,8 @@ src/clawd_buddy/
 │   ├── sound.py    # procedural PCM sound-pack generators
 │   ├── drawing.py  # pygame draw routines (buddy + confetti)
 │   ├── about.py    # About dialog + shared buddy icon
-│   └── tray.py     # pystray icon + right-click menu
+│   ├── tray.py     # pystray icon + right-click menu
+│   └── sni.py      # Linux tray backend: StatusNotifierItem + DBusMenu over D-Bus
 └── platform/
     ├── __init__.py # cross-platform facade
     ├── _windows.py # Win32 ctypes (transparency, taskbar, autostart)
@@ -621,6 +622,12 @@ The buddy adds a system tray icon with a right-click menu:
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
 - **About…** — open a tabbed dialog: **About** (version / repo / author) and **Reminders** (edit interval, sound, and quiet hours; live countdown; "Drank now" button).
 - **Quit** — close the buddy
+
+On Linux the menu is drawn by your panel itself (GNOME, KDE, Xfce,
+Cinnamon…) from a StatusNotifierItem the buddy publishes on D-Bus, so it
+looks like every other tray menu. Clicking the icon with either button
+opens it. On stock GNOME this needs the **AppIndicator and KStatusNotifierItem
+Support** extension (Ubuntu ships it enabled).
 
 ### Autostart
 
@@ -798,6 +805,28 @@ If that line is missing, the buddy fell back to the themed background:
 - **You exported `SDL_VIDEODRIVER`** to something other than `x11`, or set
   `SDL_FRAMEBUFFER_ACCELERATION` / `SDL_VIDEO_X11_WINDOW_VISUALID` yourself.
   The buddy respects your values, so unset them to get transparency back.
+
+### Linux: right-clicking the tray icon does nothing
+
+Fixed in **0.1.24**. On Linux, pystray can only show a menu through
+PyGObject (`gi`), which isn't available in a `uv tool` / `pipx` / pip
+install. It silently fell back to a bare X11 tray icon with no menu at all.
+The buddy now publishes its tray icon as a StatusNotifierItem over D-Bus
+(pure Python, via `jeepney`), and the panel draws the full menu natively.
+Upgrade (`uv tool upgrade clawd-buddy`), then restart the buddy. With
+`--fg` you should see `[buddy] Tray: StatusNotifierItem (D-Bus menu)`.
+
+If you see `no StatusNotifierItem host found` instead, nothing on your
+desktop hosts StatusNotifierItem icons:
+
+- **GNOME without Ubuntu's defaults** (Fedora, Arch, Debian…): install and
+  enable the *AppIndicator and KStatusNotifierItem Support* extension, then
+  restart the buddy.
+- **Minimal window managers** (i3, Openbox…): use a bar or tray that
+  supports StatusNotifierItem (e.g. waybar, polybar with a SNI module,
+  `snixembed`).
+- **You set `PYSTRAY_BACKEND`**: the buddy then leaves tray handling to
+  pystray. Unset it to get the D-Bus menu back.
 
 ## Disclaimer
 

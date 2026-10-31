@@ -303,4 +303,26 @@ def _create_tray_impl(state):
         pystray.MenuItem("About…", on_about),
         pystray.MenuItem("Quit", on_quit),
     )
-    pystray.Icon("clawd-buddy", img, "Clawd Buddy", menu).run()
+    icon_cls = _pick_icon_class(pystray)
+    icon_cls("clawd-buddy", img, "Clawd Buddy", menu).run()
+
+
+def _pick_icon_class(pystray):
+    """Choose the tray backend.
+
+    On Linux without PyGObject (any `uv tool` / `pipx` / venv install),
+    pystray falls back to its xorg backend, which can't show a menu at
+    all, so right-clicking the icon did nothing. When a panel hosts
+    StatusNotifierItem icons (GNOME + AppIndicator extension, KDE, Xfce,
+    ...), use our own D-Bus backend instead, which has a native menu.
+    A menu-capable pystray backend, or an explicit PYSTRAY_BACKEND, is
+    left alone."""
+    if (sys.platform == "linux" and not pystray.Icon.HAS_MENU
+            and "PYSTRAY_BACKEND" not in os.environ):
+        from . import sni
+        if sni.watcher_available():
+            print("[buddy] Tray: StatusNotifierItem (D-Bus menu)")
+            return sni.SniIcon
+        print("[buddy] Tray: no StatusNotifierItem host found — the tray "
+              "icon has no menu (see README: Linux tray menu)")
+    return pystray.Icon

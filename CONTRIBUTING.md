@@ -80,7 +80,8 @@ clawd-buddy/
 │   │   ├── sound.py       # Procedural PCM generators + pack registry
 │   │   ├── drawing.py     # rounded_rect + draw_buddy
 │   │   ├── about.py       # About dialog + shared buddy icon
-│   │   └── tray.py        # pystray icon + right-click menu
+│   │   ├── tray.py        # pystray icon + right-click menu
+│   │   └── sni.py         # Linux tray backend (StatusNotifierItem + DBusMenu)
 │   └── platform/
 │       ├── __init__.py    # Cross-platform facade
 │       ├── _windows.py    # Win32 ctypes (transparency, taskbar, autostart)
