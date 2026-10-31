@@ -1,6 +1,6 @@
 [project]
 name = "clawd-buddy"
-version = "0.1.23"
+version = "0.1.24"
 description = "Animated terminal pet that sits on your taskbar and reacts to AI coding assistant events"
 readme = "README.md"
 license = "MIT"
@@ -26,6 +26,8 @@ dependencies = [
     "pygame-ce>=2.5",
     "pystray>=0.19",
     "Pillow>=10.0",
+    # Linux tray menu over D-Bus (StatusNotifierItem); pure Python.
+    "jeepney>=0.8; sys_platform == 'linux'",
 ]
 
 [project.urls]
