@@ -32,7 +32,7 @@ from ..config import (
 )
 from .about import _make_buddy_icon_image, show_about_dialog
 from .sound import SOUND_PACK_NAMES, SOUND_PACK_OFF
-from .themes import CHARACTER_THEMES, CLASSIC_THEMES, theme_label
+from .themes import CLASSIC_THEMES, THEME_GROUPS, theme_label
 
 
 def _tray_log_path():
@@ -123,11 +123,22 @@ def _create_tray_impl(state):
             radio=True,
         )
 
-    # Classic palettes, then the character themes.
+    # Classic palettes, then a submenu per group of characters (30 in
+    # one list would run off a laptop screen).
+    def _group_item(title, names):
+        # The group holding the current theme names it: "Animals · Fox".
+        def text(_item):
+            if state.theme_name in names:
+                return f"{title} · {theme_label(state.theme_name)}"
+            return title
+        return pystray.MenuItem(
+            text, pystray.Menu(*[_theme_item(n) for n in names]))
+
     theme_submenu = pystray.Menu(
         *[_theme_item(name) for name in CLASSIC_THEMES],
         pystray.Menu.SEPARATOR,
-        *[_theme_item(name) for name in CHARACTER_THEMES],
+        *[_group_item(title, names)
+          for key, title, names in THEME_GROUPS if key != "classic"],
     )
 
     # Size submenu — radio list of the size presets. The main loop

@@ -9,6 +9,8 @@ valid state, and `draw_buddy` must consume/advance the confetti
 particle list every frame.
 """
 
+import math
+
 import pygame
 import pytest
 
@@ -96,7 +98,9 @@ class TestCostumes:
     def test_band_outside_the_shell_is_skipped(self):
         assert drawing._clipped_band((10, 20, 80, 60, 20), 0, 5, 0, 10) is None
 
-    @pytest.mark.parametrize("theme", ["batman", "pikachu", "hulk", "dory"])
+    @pytest.mark.parametrize("theme", ["batman", "pikachu", "hulk", "dory",
+                                       "bunny", "stitch", "lion", "panda",
+                                       "ariel", "snowwhite"])
     def test_head_parts_draw_above_the_head(self, theme, clock):
         # Ears, hair and fins stick out above the body; a classic theme
         # leaves that strip empty.
@@ -114,7 +118,8 @@ class TestCostumes:
         assert strip_pixels(theme) > 20
 
     def test_costumes_draw_in_every_mode(self, surface, state):
-        for name in ("nemo", "ironman", "spiderman", "captain"):
+        from clawd_buddy.ui.themes import CHARACTER_THEMES
+        for name in CHARACTER_THEMES:
             state.set_theme(name)
             for set_mode in (lambda s: None, lambda s: s.celebrate(),
                              lambda s: s.wave(), lambda s: s.start_thinking()):
@@ -614,3 +619,42 @@ class TestOffset:
         pill_y = drawing.BASE_TOP - drawing.PILL_GAP - drawing.PILL_H / 2
         row = [surf.get_at((x, int(pill_y))).a for x in range(WIN_W)]
         assert max(row) == 255
+
+
+class TestNewCostumeParts:
+    def _draw(self, name, clock):
+        surf = pygame.Surface((drawing.WIN_W, drawing.WIN_H), pygame.SRCALPHA)
+        st = buddy_state.BuddyState(theme_name=name, sound_pack="off",
+                                    clock=clock)
+        drawing.BuddyRenderer().draw(surf, 1000.0, st, blink=False)
+        return surf
+
+    def _alpha_cols(self, surf, y):
+        return [x for x in range(drawing.WIN_W) if surf.get_at((x, y))[3]]
+
+    @pytest.mark.parametrize("theme", ["superman", "rapunzel", "lion"])
+    def test_behind_parts_stick_out_at_the_sides(self, theme, clock):
+        # A cape, very long hair or a mane is wider than the body.
+        y = int(drawing.GROUND_Y - 10)
+        plain = self._alpha_cols(self._draw("dark", clock), y)
+        dressed = self._alpha_cols(self._draw(theme, clock), y - 20
+                                   if theme == "lion" else y)
+        assert min(dressed) < min(plain) - 3
+        assert max(dressed) > max(plain) + 3
+
+    def test_mask_eyes_use_the_eye_colour(self, clock):
+        # Panda: white eyes on black patches, on a white face.
+        surf = self._draw("panda", clock)
+        cx = drawing.WIN_W // 2
+        row = drawing.BASE_TOP + 16 + (drawing.BODY_H - 27) * 0.45
+        eye = surf.get_at((cx - 13, int(row)))[:3]
+        assert sum(eye) > 600
+
+    def test_ellipse_points_rotate(self):
+        pts = drawing._ellipse_pts(0, 0, 10, 2, math.pi / 2, n=4)
+        assert pts[0] == pytest.approx((0, 10), abs=1e-9)
+
+    def test_shrink_about_the_centroid(self):
+        pts = drawing._shrink([(0, 0), (4, 0), (4, 4), (0, 4)], 0.5)
+        assert pts == [(1, 1), (3, 1), (3, 3), (1, 3)]
+

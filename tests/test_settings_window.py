@@ -168,6 +168,34 @@ class TestWindow:
         assert window.st.theme_name == "nord"
         assert window.saved()["theme"] == "nord"
 
+    def test_theme_groups_switch_the_grid(self, window):
+        c = window.cc.controls
+        assert c["theme_group"].value == "classic"
+        assert c["theme"].winfo_manager() == "pack"
+        assert not c["theme_animals"].winfo_manager()
+        _click_option(c["theme_group"], "animals")
+        assert c["theme_animals"].winfo_manager() == "pack"
+        assert not c["theme"].winfo_manager()
+        # Every grid is the same size, so the window doesn't jump.
+        heights = {c[k].h for k in ("theme", "theme_characters",
+                                    "theme_princesses", "theme_animals")}
+        assert len(heights) == 1
+
+    def test_pick_from_the_second_row(self, window):
+        sw = window.cc.controls["theme_characters"]
+        i = [v for v, *_ in sw.items].index("deadpool")
+        row, col = divmod(i, sw.cols)
+        assert row == 1
+        sw._click(types.SimpleNamespace(x=col * sw.cell + 2,
+                                        y=row * sw.row_h + 5))
+        assert window.st.theme_name == "deadpool"
+        assert window.saved()["theme"] == "deadpool"
+
+    def test_theme_picked_elsewhere_shows_its_group(self, window):
+        window.st.set_theme("elsa")
+        window.cc.kit.refresh_all()
+        assert window.cc.controls["theme_group"].value == "princesses"
+
     def test_toggle_applies_and_saves(self, window):
         window.cc.controls["reduce_motion"]._click(None)
         assert window.st.reduce_motion is True

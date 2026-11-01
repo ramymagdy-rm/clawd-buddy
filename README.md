@@ -244,7 +244,8 @@ permission, you know which window to switch to.
 
 ### Themes
 
-Clawd Buddy ships with **16 themes**: 8 classic colour palettes and 8 characters.
+Clawd Buddy ships with **38 themes**: 8 classic colour palettes and 30
+characters, princesses and animals.
 
 **Classic palettes**, a mix of dark and light:
 
@@ -271,6 +272,38 @@ Clawd Buddy ships with **16 themes**: 8 classic colour palettes and 8 characters
 | 14 | `spiderman` | Red mask with a black web and blue arms |
 | 15 | `captain` | Blue, red gloves and boots, a star shield on the forehead |
 | 16 | `pikachu` | Electric yellow, black-tipped ears and red cheeks |
+| 17 | `minion` | Yellow, goggles on a black strap and blue overalls |
+| 18 | `walle` | Rusty yellow box with grey binocular eyes |
+| 19 | `superman` | Blue, a red cape and boots, the S shield |
+| 20 | `stitch` | Blue, with huge pink-lined ears and a little nose |
+| 21 | `kirby` | Pink puffball with rosy cheeks and red shoes |
+| 22 | `buzz` | White space suit, purple hood and green panels |
+| 23 | `deadpool` | Red mask with black eye patches and big white eyes |
+
+**Princesses**, with a face, their hair and their gown's colour:
+
+| # | Theme | Look |
+| --- | --- | --- |
+| 24 | `elsa` | Icy blue, platinum hair in a braid over the shoulder |
+| 25 | `ariel` | Sea green, long red hair |
+| 26 | `belle` | Golden gown, long brown hair |
+| 27 | `cinderella` | Pale blue gown, blonde hair and a headband |
+| 28 | `snowwhite` | Blue and yellow, a black bob and a red bow |
+| 29 | `jasmine` | Teal, long black hair and a gold headband |
+| 30 | `rapunzel` | Purple, golden hair so long it pools on the floor |
+
+**Animals**:
+
+| # | Theme | Look |
+| --- | --- | --- |
+| 31 | `panda` | White, black ears and eye patches |
+| 32 | `fox` | Orange, dark-tipped ears and a cream face |
+| 33 | `cat` | Grey tabby with pink ears, stripes and whiskers |
+| 34 | `tiger` | Orange with black stripes, round ears and whiskers |
+| 35 | `penguin` | Black, a white face, an orange beak and feet |
+| 36 | `frog` | Green, with bulging eyes on top |
+| 37 | `bunny` | White, long pink-lined ears and a pink nose |
+| 38 | `lion` | Golden, with a shaggy mane |
 
 The character themes are fan-made tributes and aren't affiliated with or
 endorsed by the owners of those characters.
@@ -286,8 +319,9 @@ clawd-buddy --theme batman
 
 Switch at runtime from the **Theme** submenu on the system-tray icon
 (right-click the clawd-buddy tray icon → **Theme** → pick one; the
-characters are below the line), or from the colour dots on the settings
-window's **Buddy** page. The active theme is marked.
+characters, princesses and animals each have a submenu below the line),
+or from the settings window's **Buddy** page, which switches between
+the four groups. The active theme is marked.
 
 Your choice is **remembered between launches**. The buddy stores the last
 theme in:

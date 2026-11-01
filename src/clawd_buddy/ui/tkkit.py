@@ -659,34 +659,46 @@ def Stepper(parent, kit, values, get, set_, fmt=str, wrap=False, bg=None,
     return kit.register(_Stepper())
 
 
-def Swatches(parent, kit, items, get, set_, bg=None):
-    """Row of colour dots. `items` is [(value, label, fill, inner)]."""
+_SWATCH_D = 26   # swatch dot diameter
+
+
+def Swatches(parent, kit, items, get, set_, bg=None, columns=None,
+             rows=1, cell=None):
+    """Grid of colour dots, `columns` to a row (all in one row by
+    default), at least `rows` rows tall. `items` is
+    [(value, label, fill, inner)]; `cell` fixes the column width so
+    several grids line up."""
     Canvas = _canvas_class()
 
     class _Swatches(Canvas, _Base):
-        D = 26
+        D = _SWATCH_D
 
         def __init__(self):
             self.items = list(items)
-            self.cell = max([kit.f_small.measure(lbl)
-                             for _v, lbl, _f, _i in self.items]
-                            + [kit.px(self.D)]) + kit.px(10)
-            self.h = kit.px(self.D) + kit.px(22)
-            Canvas.__init__(self, parent, width=self.cell * len(self.items),
+            self.cols = columns or max(1, len(self.items))
+            self.cell = cell or swatch_cell(kit, [lbl for _v, lbl, _f, _i
+                                                  in self.items])
+            self.row_h = kit.px(self.D) + kit.px(24)
+            n_rows = max(rows, -(-len(self.items) // self.cols))
+            self.h = self.row_h * n_rows
+            Canvas.__init__(self, parent, width=self.cell * self.cols,
                             height=self.h, cursor="hand2")
             self._init_base(kit, bg or kit.p["card"])
             self.value = get()
             self.bind("<Button-1>", self._click)
             self.bind("<Motion>",
-                      lambda e: self._set_hover(self._at(e.x)))
+                      lambda e: self._set_hover(self._at(e.x, e.y)))
             self.draw()
 
-        def _at(self, x):
-            i = int(x // self.cell)
+        def _at(self, x, y=0):
+            col, row = int(x // self.cell), int(y // self.row_h)
+            if not 0 <= col < self.cols:
+                return None
+            i = row * self.cols + col
             return i if 0 <= i < len(self.items) else None
 
         def _click(self, e):
-            i = self._at(e.x)
+            i = self._at(e.x, e.y)
             if i is not None:
                 self.value = self.items[i][0]
                 set_(self.value)
@@ -702,19 +714,28 @@ def Swatches(parent, kit, items, get, set_, bg=None):
             self.delete("all")
             d = kit.px(self.D)
             for i, (v, lbl, fill, inner) in enumerate(self.items):
-                cx = i * self.cell + self.cell / 2
+                row, col = divmod(i, self.cols)
+                cx = col * self.cell + self.cell / 2
+                top = row * self.row_h
                 sel = v == self.value
                 ring = self.p["accent"] if sel else (
                     self.p["faint"] if self._hover == i else None)
                 img = kit.circle(d, fill, ring=ring, ring_w=kit.px(1),
                                  inner=inner, inner_frac=0.42)
-                self.create_image(cx, d / 2, image=img)
-                self.create_text(cx, d + kit.px(11), text=lbl,
+                self.create_image(cx, top + d / 2, image=img)
+                self.create_text(cx, top + d + kit.px(11), text=lbl,
                                  fill=self.p["text"] if sel
                                  else self.p["muted"],
                                  font=kit.f_small)
 
     return kit.register(_Swatches())
+
+
+def swatch_cell(kit, labels):
+    """Column width that fits every label under a swatch dot."""
+    return max([kit.f_small.measure(lbl) for lbl in labels]
+               + [kit.px(_SWATCH_D)]) + kit.px(10)
+
 
 
 def Bars(parent, kit, get, bg=None, width=150, height=56):
