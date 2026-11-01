@@ -19,7 +19,8 @@ Options:
                    session, then enter the thinking animation) and exit.
                    Reads session_id from piped JSON on stdin when run as
                    a hook command.
-  --session-id ID  Explicit session id for --prompt-start (overrides stdin)
+  --session-id ID  Explicit session id for --prompt-start / --send / --wave
+                   (overrides stdin)
   --top            Signal running buddy to re-assert always-on-top and exit
   --quit           Ask the running buddy to exit cleanly and exit
   --theme THEME    Color theme — one of: dark, light, dracula, monokai,
@@ -38,7 +39,8 @@ Options:
 Controls:
   Drag             Click and drag to reposition
   Space            Test celebration
-  Ctrl+1/2/3/4     Resize: 100% / 125% / 150% / 200%
+  Ctrl+1..7        Size: S 1x / M 1.25x / L 1.5x / L+ 2x / XL 3x / XXL 4x /
+                   XXXL 5x
   Escape           Quit
 
 Switch themes from the system-tray right-click menu (Theme submenu)
@@ -47,63 +49,24 @@ or with the --theme CLI flag at launch.
 
 import json
 import os
-import socket
 import sys
-import threading
-import time
 
-from .cli import parse_args, read_hook_stdin, workspace_label_from_cwd
-from .config import (
-    load_saved_quiet_hours,
-    load_saved_reduce_motion,
-    load_saved_reminder_anchor_minute,
-    load_saved_reminder_enabled,
-    load_saved_reminder_interval,
-    load_saved_reminder_quiet_hours,
-    load_saved_reminder_sound,
-    load_saved_sound_pack,
-    load_saved_theme,
-    load_saved_volume,
-    load_saved_workspace_badge,
-    save_theme_pref,
-)
-from .constants import FPS, SOCK_PORT, WIN_H, WIN_W
-from .ipc import request_status, send_signal, socket_listener
-from .webhook import webhook_listener
-from .platform import (
-    auto_detach,
-    center_window,
-    disable_startup,
-    enable_startup,
-    get_bg_fill,
-    get_initial_position,
-    get_window_handle,
-    get_window_rect,
-    move_window,
-    prepare_window_transparency,
-    raise_window,
-    resize_window,
-    set_dpi_awareness,
-    setup_window,
-    window_has_alpha,
-)
-from . import history
-from .state import BuddyState
-from .ui.about import make_buddy_icon_surface
-from .ui.drawing import compose_frame, draw_buddy
-from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
-from .ui.tray import create_tray
-
+# Before anything can import pygame: keep its "Hello from the pygame
+# community" banner out of hook output (Claude Code shows hook stdout).
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 # Force X11 on Linux — Wayland restricts window positioning & always-on-top
 if sys.platform == "linux":
     os.environ.setdefault("SDL_VIDEODRIVER", "x11")
 
-import pygame
-
-
-
+# Only light modules at import time. Hooks run `clawd-buddy --send` /
+# `--wave` / `--prompt-start` on every prompt, and those one-shot
+# signals must not pay for pygame, Pillow, pystray or http.server —
+# the GUI-only imports live in `_run_buddy`.
+from .cli import parse_args, read_hook_stdin, workspace_label_from_cwd
+from .config import load_saved_theme, save_theme_pref
+from .constants import SOCK_PORT
+from .ipc import request_status, send_signal
 
 
 # ── Main ──────────────────────────────────────────────────────────────
@@ -124,9 +87,11 @@ def main():
 
     # --startup / --no-startup
     if args.startup:
+        from .platform import enable_startup
         enable_startup()
         sys.exit(0)
     if args.no_startup:
+        from .platform import disable_startup
         disable_startup()
         sys.exit(0)
 
@@ -141,12 +106,16 @@ def main():
         sys.exit(0)
 
     # --send / --wave / --top / --quit / --prompt-start / --message /
-    # --drank / --pomodoro / --pomodoro-stop
+    # --drank / --pomodoro / --pomodoro-stop / --settings
     # (any of these signals a running instance and exits)
     if (args.send is not None or args.wave or args.top or args.quit
             or args.prompt_start or args.message is not None or args.drank
-            or args.pomodoro is not None or args.pomodoro_stop):
+            or args.pomodoro is not None or args.pomodoro_stop
+            or args.settings is not None):
         payload_obj = {}
+        # Claude Code passes hook metadata (session_id, cwd, …) as JSON
+        # on stdin to every hook command; from a terminal there's none.
+        hook = read_hook_stdin()
         if args.quit:
             payload_obj["action"] = "quit"
         elif args.top:
@@ -156,6 +125,9 @@ def main():
         elif args.drank:
             # M4: external acknowledgment for the water-reminder.
             payload_obj["action"] = "drank"
+        elif args.settings is not None:
+            payload_obj["action"] = "settings"
+            payload_obj["page"] = args.settings
         elif args.pomodoro_stop:
             # M6: end the running pomodoro cycle.
             payload_obj["action"] = "pomodoro_stop"
@@ -172,27 +144,21 @@ def main():
             payload_obj["text"] = args.message
         elif args.prompt_start:
             payload_obj["action"] = "prompt_start"
-            # Claude Code passes hook metadata as JSON on stdin. Prefer an
-            # explicit --session-id when given; otherwise fall back to the
-            # piped JSON. When neither is available the running buddy uses
-            # its time-based new-session heuristic.
-            hook = read_hook_stdin()
+        else:
+            payload_obj["action"] = "celebrate"
+        # Which Claude Code session is signaling, so the buddy can tell
+        # concurrent sessions apart (one's Stop mustn't end another's
+        # thinking). An explicit --session-id wins over the hook's. A
+        # prompt without one falls back to the time-based new-session
+        # heuristic; a Stop without one ends every session.
+        if payload_obj["action"] in ("prompt_start", "celebrate", "wave"):
             session_id = args.session_id or hook.get("session_id")
             if session_id:
                 payload_obj["session_id"] = session_id
-        else:
-            payload_obj["action"] = "celebrate"
         # M7: attach a workspace label to whatever signal is going out.
         # Explicit --workspace wins; otherwise derive from the hook
-        # payload's cwd (Stop / PermissionRequest hooks pipe JSON too,
-        # not just UserPromptSubmit — so re-read stdin unless the
-        # prompt-start branch already consumed it). Harmless extra key
-        # for receivers that don't care.
-        if args.prompt_start:
-            ws_cwd = hook.get("cwd")
-        else:
-            ws_cwd = read_hook_stdin().get("cwd")
-        workspace = args.workspace or workspace_label_from_cwd(ws_cwd)
+        # payload's cwd. Harmless extra key for receivers that don't care.
+        workspace = args.workspace or workspace_label_from_cwd(hook.get("cwd"))
         if workspace:
             payload_obj["workspace"] = workspace
         if send_signal(payload_obj, port=port):
@@ -201,6 +167,64 @@ def main():
             print(f"[buddy] No buddy on port {port}")
             sys.exit(1)
         sys.exit(0)
+
+    _run_buddy(args, port)
+
+
+def _run_buddy(args, port):
+    """Start the GUI buddy: detach, take the single-instance lock, open
+    the window and run the render loop. Everything heavy is imported
+    here so the one-shot signal path in `main` stays fast."""
+    import socket
+    import threading
+    import time
+
+    from .config import (
+        load_saved_quiet_hours,
+        load_saved_reduce_motion,
+        load_saved_reminder_anchor_minute,
+        load_saved_reminder_enabled,
+        load_saved_reminder_interval,
+        load_saved_reminder_quiet_hours,
+        load_saved_reminder_sound,
+        load_saved_scale_preset,
+        load_saved_sound_pack,
+        load_saved_volume,
+        load_saved_workspace_badge,
+        save_scale_pref,
+    )
+    from .constants import FPS_ACTIVE, FPS_IDLE, WIN_H, WIN_W
+    from .ipc import socket_listener
+    from .webhook import webhook_listener
+    from .platform import (
+        auto_detach,
+        center_window,
+        get_bg_fill,
+        get_initial_position,
+        get_window_handle,
+        get_window_rect,
+        get_work_areas,
+        install_launcher,
+        move_window,
+        prepare_window_transparency,
+        raise_window,
+        resize_window,
+        set_dpi_awareness,
+        set_input_region,
+        setup_window,
+        window_has_alpha,
+    )
+    from . import history
+    from .placement import DragPlacement, area_at, visible_limits
+    from .state import BuddyState
+    from .ui.about import make_buddy_icon_surface, show_about_dialog
+    from .ui.drawing import (
+        GROUND_Y, HIT_BOX, OFFSET_LIMITS, BuddyRenderer, compose_frame,
+        frame_size_for)
+    from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
+    from .ui.tray import create_tray
+
+    import pygame
 
     # Auto-detach: run in background
     if not args.fg:
@@ -242,10 +266,10 @@ def main():
     try:
         lock_sock.bind(("127.0.0.1", port + 1))
     except OSError:
-        print("[buddy] Already running — sending signal.")
-        # Best-effort hello — the running buddy treats unknown actions as
-        # a celebrate, but a malformed payload here would just be ignored.
-        send_signal({"message": "hello"}, port=port)
+        # Started again (say, from the dock or the app grid): bring up
+        # the running buddy's settings window, like any app would.
+        print("[buddy] Already running — opening its settings.")
+        send_signal({"action": "settings"}, port=port)
         sys.exit(0)
 
     # Declare DPI awareness before any screen metric or window is created.
@@ -256,6 +280,13 @@ def main():
     mode = set_dpi_awareness()
     if mode:
         print(f"[buddy] DPI awareness: {mode}")
+
+    # Name the window after the app, not the script ("app.py"), so the
+    # dock matches it to the Clawd Buddy launcher and its icon. SDL
+    # reads this when the display starts, just below; `import pygame`
+    # has already set it to the script name, so override it.
+    os.environ["SDL_VIDEO_X11_WMCLASS"] = "clawd-buddy"
+    os.environ["SDL_VIDEO_WAYLAND_WMCLASS"] = "clawd-buddy"
 
     # Linux: request a 32-bit ARGB window so the background is truly
     # transparent instead of a solid rectangle around the buddy. Must
@@ -279,6 +310,9 @@ def main():
     except Exception as e:
         print(f"[buddy] Window icon failed: {e}")
     clock = pygame.time.Clock()
+    # The dock / app-grid launcher (Linux). Off the main thread: it
+    # draws a 256 px icon and touches the disk.
+    threading.Thread(target=install_launcher, daemon=True).start()
 
     handle = get_window_handle()
     setup_window(handle, topmost=not args.no_topmost)
@@ -333,15 +367,19 @@ def main():
     reminder_sounds = init_reminder_sounds(user_volume=saved_volume)
 
     if args.test:
-        state.trigger()
+        state.celebrate()
 
-    # Base surface — always draw at native resolution, then scale to window.
-    # It carries per-pixel alpha only when the window does (Linux ARGB);
-    # otherwise the background is an opaque colour (Windows colour-key
-    # or the theme's bg_fill).
+    # The size picked last time (tray Size menu / Ctrl+1..6). The window
+    # opens at 1x on the taskbar and the first frame resizes it around
+    # the buddy's feet.
+    state.set_scale(load_saved_scale_preset())
+
+    # The window has per-pixel alpha on Linux with a compositor; there
+    # the frame is supersampled and filtered down for smooth edges.
+    # Otherwise (Windows colour-key, bare X11) it's an opaque frame at
+    # window size with hard edges. See ui/drawing.py.
     transparent = window_has_alpha(screen)
-    base_surf = pygame.Surface(
-        (WIN_W, WIN_H), pygame.SRCALPHA if transparent else 0)
+    renderer = BuddyRenderer()
 
     # Background threads
     threading.Thread(target=socket_listener, args=(state, port),
@@ -361,18 +399,99 @@ def main():
             daemon=True,
         ).start()
 
-    # Drag state
-    dragging = False
-    drag_off = (0, 0)
+    # Drag state. The window can only go as far as the window manager
+    # allows (mutter keeps it inside the monitor's work area); past that
+    # the character slides inside its own window, so it can still reach
+    # the top and sides of the screen. See placement.py.
+    placement = DragPlacement()
+    work_areas = []
+    reconcile_at = None
+
+    def pointer_pos(ev_pos):
+        """Pointer position on the desktop. Falls back to window origin
+        + event position on pygame builds without `desktop=`."""
+        try:
+            return pygame.mouse.get_pos(desktop=True)
+        except TypeError:
+            wx, wy, _, _ = get_window_rect(handle)
+            return wx + ev_pos[0], wy + ev_pos[1]
+
+    def offset_limits_px():
+        sc = state.scale
+        return tuple(v * sc for v in OFFSET_LIMITS)
+
+    def visible_box_px():
+        """The character plus its ground shadow, in window pixels: what
+        must stay on screen when the window is bigger than it."""
+        sc = state.scale
+        x, y, w, h = HIT_BOX
+        return (x * sc, y * sc, w * sc, (h + 4) * sc)
+
+    def limits_at(wx, wy):
+        """Offset limits for the window at (wx, wy), kept to the visible
+        part of the window when it's bigger than the monitor (XXXL)."""
+        areas = work_areas or get_work_areas()
+        if not areas:
+            return offset_limits_px()
+        w, h = screen.get_size()
+        bx, by, bw, bh = visible_box_px()
+        ox, oy = placement.offset
+        here = (wx + bx + ox + bw / 2, wy + by + oy + bh / 2)
+        return visible_limits(offset_limits_px(), (wx, wy, w, h),
+                              (bx, by, bw, bh), area_at(areas, here))
+
+    def settle(desired):
+        """Aim the character at where it would be with its window at
+        `desired`, wherever the window manager actually put the window,
+        and check again once it has settled."""
+        nonlocal reconcile_at
+        wx, wy, _, _ = get_window_rect(handle)
+        placement.aim(desired, (wx, wy), limits_at(wx, wy))
+        sync_offset()
+        reconcile_at = t + 0.3
+
+    def sync_offset():
+        sc = state.scale
+        ox, oy = placement.offset
+        renderer.offset = (ox / sc, oy / sc)
+
+    # Only the character itself takes mouse input; clicks on the
+    # transparent rest of the window reach whatever is behind it.
+    applied_region = None
+    region_recheck_at = None
+
+    def update_input_region():
+        nonlocal applied_region
+        sc = state.scale
+        x, y, w, h = renderer.hit_rect()
+        region = (handle, int(x * sc), int(y * sc),
+                  int(round(w * sc)), int(round(h * sc)))
+        if region != applied_region:
+            set_input_region(handle, [region[1:]])
+            applied_region = region
 
     # Blink
     blink_timer = 0.0
     blink_interval = 3.5
     blink_dur = 0.12
 
+    # Frame bookkeeping for partial updates: the frame surface (rebuilt
+    # on resize), the region of it painted last frame (cleared before
+    # the next draw), the screen region shown last frame (folded into
+    # the next display update so the old pose gets erased) and the
+    # background colour the frame was filled with.
+    frame = None
+    frame_dirty = None
+    shown = None
+    frame_bg = None
+
     running = True
     while running:
-        dt = clock.tick(FPS) / 1000.0
+        # 60 FPS while something is moving fast (reactions, confetti,
+        # an easing transition, a drag); 30 FPS for the ambient idle and
+        # thinking loops, which keeps the idle CPU cost low.
+        fast = placement.dragging or renderer.wants_fast_frames(state)
+        dt = clock.tick(FPS_ACTIVE if fast else FPS_IDLE) / 1000.0
         t = time.time()
 
         if state.should_quit:
@@ -381,9 +500,31 @@ def main():
         # Apply pending scale change
         if state._scale_changed:
             state._scale_changed = False
-            screen, handle = resize_window(handle, state.scale, topmost)
+            # Grow or shrink around the buddy's feet, so it stays put.
+            ox, oy = renderer.offset
+            feet = ((WIN_W / 2 + ox) / WIN_W, (GROUND_Y + oy) / WIN_H)
+            wx, wy, ow, oh = get_window_rect(handle)
+            fx, fy = wx + ow * feet[0], wy + oh * feet[1]
+            screen, handle = resize_window(handle, state.scale, topmost,
+                                           anchor=feet)
+            frame = None
+            # Where the window would be with the feet in place and no
+            # offset. A window bigger than the monitor (XXXL) gets
+            # pinned to the top of the work area instead; the character
+            # then slides up inside it to stay on screen.
+            sc = state.scale
+            work_areas = get_work_areas()
+            settle((fx - WIN_W / 2 * sc, fy - GROUND_Y * sc))
+            # The window manager may work out the clickable region
+            # against the old size; set it again once the resize lands.
+            region_recheck_at = t + 0.3
 
         # Apply pending bring-to-front request
+        # Settings window asked for over IPC (`--settings`).
+        if state._settings_requested is not None:
+            page, state._settings_requested = state._settings_requested, None
+            show_about_dialog(state, page or None)
+
         if state._raise_requested:
             state._raise_requested = False
             topmost = True
@@ -395,6 +536,20 @@ def main():
         if state._center_requested:
             state._center_requested = False
             center_window(handle)
+            placement.reset()
+            work_areas = get_work_areas()
+            wx, wy, _, _ = get_window_rect(handle)
+            settle((wx, wy))
+
+        # Shortly after a drag ends, check where the window manager
+        # actually put the window and re-aim the character at the spot
+        # the drag asked for, in case it clamped differently than the
+        # published work areas predicted.
+        if reconcile_at is not None and t >= reconcile_at:
+            reconcile_at = None
+            wx, wy, _, _ = get_window_rect(handle)
+            if placement.reconcile((wx, wy), limits_at(wx, wy)):
+                sync_offset()
 
         # M3: tray's Volume submenu mutates state.volume on the tray
         # thread and flips _volume_changed; the main loop re-applies
@@ -449,6 +604,12 @@ def main():
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 running = False
+            elif ev.type == pygame.WINDOWSIZECHANGED:
+                applied_region = None   # re-send it for the new size
+            elif ev.type in (pygame.WINDOWEXPOSED, pygame.VIDEOEXPOSE):
+                # Without a compositor X11 forgets uncovered pixels, so
+                # repaint the whole window, not just the dirty region.
+                shown = None
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_ESCAPE:
                     running = False
@@ -457,27 +618,40 @@ def main():
                     # firing, Space means "I drank" (acknowledge +
                     # reset timer). Otherwise it keeps its existing
                     # "test celebration" behaviour so users haven't
-                    # lost a familiar shortcut.
+                    # lost a familiar shortcut. Only a celebration:
+                    # sessions that are working keep thinking after it.
                     if state.reminder_active:
                         state.drink_acknowledged()
                     else:
-                        state.trigger()
-                elif ev.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
-                    # Ctrl+1..4 resizes the buddy. Theme switching is now
-                    # exclusively via the tray Theme submenu.
+                        state.celebrate()
+                elif pygame.K_1 <= ev.key <= pygame.K_7:
+                    # Ctrl+1..7 picks a size (S … XXXL), like the tray
+                    # Size menu. Theme switching is via the tray only.
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_CTRL:
                         state.set_scale(ev.key - pygame.K_0)
+                        save_scale_pref(ev.key - pygame.K_0)
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                dragging = True
-                drag_off = ev.pos
-            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
-                dragging = False
-            elif ev.type == pygame.MOUSEMOTION and dragging:
-                mx, my = ev.pos
+                # Work areas change rarely (monitors, docks); one read
+                # per drag is plenty.
+                work_areas = get_work_areas()
                 wx, wy, _, _ = get_window_rect(handle)
-                move_window(handle, wx + mx - drag_off[0],
-                            wy + my - drag_off[1])
+                placement.begin(pointer_pos(ev.pos), (wx, wy))
+                reconcile_at = None
+            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 3:
+                # Right-click opens the settings window (it runs on its
+                # own thread; a second click just raises it).
+                show_about_dialog(state)
+            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                if placement.dragging:
+                    placement.end()
+                    reconcile_at = t + 0.25
+            elif ev.type == pygame.MOUSEMOTION and placement.dragging:
+                tx, ty = placement.update(
+                    pointer_pos(ev.pos), screen.get_size(), work_areas,
+                    offset_limits_px(), box=visible_box_px())
+                move_window(handle, tx, ty)
+                sync_offset()
 
         state.update()
 
@@ -486,11 +660,28 @@ def main():
         phase = blink_timer % blink_interval
         is_blink = phase > blink_interval - blink_dur
 
-        # Draw at base resolution, then scale up
-        base_surf.fill(get_bg_fill(state.theme_name, transparent))
-        draw_buddy(base_surf, t, state, is_blink)
-        compose_frame(screen, base_surf, transparent)
-        pygame.display.flip()
+        bg = get_bg_fill(state.theme_name, transparent)
+        if frame is None or bg != frame_bg:
+            frame = pygame.Surface(
+                frame_size_for(screen.get_size(), transparent),
+                pygame.SRCALPHA if transparent else 0)
+            frame.fill(bg)
+            frame_bg = bg
+            shown = None
+        elif frame_dirty is not None:
+            frame.fill(bg, frame_dirty)
+        if region_recheck_at is not None and t >= region_recheck_at:
+            region_recheck_at = None
+            applied_region = None
+        update_input_region()
+        renderer.draw(frame, t, state, is_blink)
+        frame_dirty = renderer.dirty
+        content = compose_frame(screen, frame, transparent, frame_dirty)
+        if shown is None:
+            pygame.display.flip()
+        else:
+            pygame.display.update(content.union(shown))
+        shown = content
 
     pygame.quit()
     lock_sock.close()

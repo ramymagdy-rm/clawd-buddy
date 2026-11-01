@@ -11,16 +11,47 @@ Clawd Buddy is a small always-on-top character that lives on your taskbar while 
 
 | State | What happens |
 | --- | --- |
-| **Idle** | Gently bobs, blinks, breathes — your quiet companion |
-| **New session begins** (`UserPromptSubmit` hook, first prompt) | Greets with a soft wave, a smaller smile, and a pulsing **cyan** border |
-| **Assistant is thinking** (between `UserPromptSubmit` and `Stop`) | Pupils sweep upward, three pulsing dots float above the head, gentle **purple** border |
-| **Assistant finishes** (`Stop` hook) | Celebrates with confetti, happy eyes, waving arms, a short motivational fanfare, and a pulsing **green** border |
-| **Assistant needs permission** (`PermissionRequest` hook) | Waves with a floating **!**, a warm two-note doorbell call, and a pulsing **yellow** border |
+| **Idle** | Breathes, blinks and glances around now and then — your quiet companion |
+| **New session begins** (`UserPromptSubmit` hook, first prompt) | Hops and waves hello with happy eyes; a **cyan** "New session" pill floats above its head |
+| **Assistant is thinking** (between `UserPromptSubmit` and `Stop`) | Hovers and taps away with a focused look; a **purple** "Thinking…" pill with a spinner |
+| **Assistant finishes** (`Stop` hook) | Hops with squash and stretch, arms up, confetti, a short motivational fanfare, and a **green** "Done" pill |
+| **Assistant needs permission** (`PermissionRequest` hook) | Bounces and waves with wide eyes, a warm two-note doorbell call, and a **yellow** "Needs input" pill |
+
+The status pill is the buddy's at-a-glance readout, so you can tell what
+the assistant is doing without switching windows. With a compositor (Linux)
+the buddy also gets a soft ground shadow, a coloured glow while it reacts,
+and antialiased edges.
 
 > If multiple signals arrive in quick succession (e.g. a `PermissionRequest`
 > while a celebrate is still animating), the buddy now **queues** them
 > instead of dropping them — up to three pending reactions play back in
 > the order they arrived.
+>
+> With **several Claude Code sessions** running, each one is tracked from
+> its prompt to its own `Stop` (by the hooks' `session_id`). When one
+> finishes, the buddy celebrates and then goes back to thinking for the
+> others; the pill reads "Thinking ×2" while two are working.
+
+### Settings window
+
+**Right-click the buddy** (or pick **Settings & About…** in the tray
+menu, or run `clawd-buddy --settings`) to open one window that
+controls everything:
+
+| Page | What's there |
+| --- | --- |
+| **Buddy** | What the buddy is doing right now (with a chip per working workspace), Celebrate / Bring to front / Center on screen, size, theme, reduce motion, workspace badges, start at login |
+| **Sound** | Sound pack (picking one plays a preview), volume, quiet hours with any start and end time |
+| **Reminders** | Today's cups and a bar chart of recent days, an **I drank water** button, and the reminder schedule: on/off, how often, when the day starts, sound, overnight pause |
+| **Focus** | A pomodoro timer with a live countdown ring: focus and break lengths, Start / Restart / Stop |
+| **About** | Version, source link, the settings folder, keyboard shortcuts |
+
+Every change applies to the buddy at once and is saved; there is no
+Save button. Changes made elsewhere (the tray menu, Ctrl+1…7) show up
+in the window while it's open. It follows your desktop's light or dark
+preference. `clawd-buddy --settings focus` opens it on a given page,
+and the sidebar's **Quit Clawd Buddy** button asks for a second click
+before it closes the buddy.
 
 ### Notification sound packs
 
@@ -45,7 +76,7 @@ envelopes). Your choice persists across launches in `config.json` under
 Toggle from the system-tray right-click menu → **Sound**. The choice is
 remembered between launches (saved alongside the theme in `config.json`).
 If your machine has no audio device, the buddy logs a one-line warning and
-runs silently while the visual border still works.
+runs silently while the status pill still shows what's happening.
 
 ### Comfort & accessibility
 
@@ -53,10 +84,11 @@ Three preferences keep the buddy polite across motion sensitivities,
 audio environments, and quiet hours:
 
 - **Reduce motion** (system-tray → **Reduce Motion** toggle).
-  When on, the buddy stops bobbing, swinging limbs, and spawning
-  confetti. The pulsing colored border and notification sounds remain
-  — the signaling minimum — so you can still tell when Claude is
-  greeting, thinking, waving, or celebrating.
+  When on, the buddy stops hopping, bobbing, swinging limbs, and
+  spawning confetti, and holds a still pose for each state. The status
+  pill and notification sounds remain — the signaling minimum — so you
+  can still tell when Claude is greeting, thinking, waving, or
+  celebrating.
 - **Volume** (system-tray → **Sound** → **Volume**).
   Discrete steps from **0% to 100%** scale the active pack's per-event
   base levels (celebrate is intentionally louder than wave). Clicking a
@@ -76,14 +108,15 @@ quiet hours off.
 
 The buddy can nudge you to drink water on a schedule. Off by default
 — turn it on from the system tray (**Water Reminder** toggle) or
-from the **About → Reminders** tab where every preference lives:
+from the settings window's **Reminders** page, where every preference
+lives:
 
 | Setting | Options |
 | --- | --- |
-| **Interval** | `30 min`, `1 h` (default), `1.5 h`, `2 h`, `4 h` — picked from a scrolling dropdown directly under the **Remind me to drink water** checkbox |
-| **Start reminders at** | HH:MM combobox (30-min steps, default **08:00**). The day's schedule cycles from this anchor: with start=09:00 and interval=1 h, reminders land at 09:00, 10:00, 11:00, … |
-| **Sound** | `water` (default — high-pitched bell), `chime` (calmer two-bell pair), `beep` (square-wave triple-blip), or `off` for visual-only |
-| **Quiet hours** | Default **23:00–08:00**, edited via HH:MM comboboxes in 30-min increments. Pick the same time for both endpoints to disable. |
+| **How often** | `30m`, `1h` (default), `1.5h`, `2h`, `4h` |
+| **Day starts at** | A time in 30-min steps (default **08:00**). The day's schedule cycles from this anchor: with 09:00 and every 1 h, reminders land at 09:00, 10:00, 11:00, … |
+| **Sound** | `water` (default — high-pitched bell), `chime` (calmer two-bell pair), `beep` (square-wave triple-blip), or `off` for visual-only. Picking one plays it |
+| **Pause overnight** | On by default, **23:00–08:00**, in 30-min steps. Switch it off to be reminded around the clock |
 
 When the reminder fires:
 
@@ -106,7 +139,7 @@ block in `config.json` (`enabled`, `interval`, `anchor_minute`,
 
 ### Drinking history
 
-Every drink-ack — Space, the tray entry, the About-window button, or
+Every drink-ack — Space, the tray entry, the settings-window button, or
 `clawd-buddy --drank` — increments a per-day cup counter that lives in
 **`~/.clawd-buddy/history.json`** (`C:\Users\<name>\.clawd-buddy\` on
 Windows, `~/.clawd-buddy/` on Linux). The path is intentionally
@@ -114,13 +147,10 @@ separate from `config.json` — settings sit in the platform config dir,
 **runtime data sits in the home directory** where it's easy to back up
 or sync via dotfile management.
 
-The **About → Reminders** tab shows:
-
-- **`3 cups today`** (bold headline, with singular/plural handling)
-- **`Recent days: 6 · 5 · 7 · 4 · 5 · 6 · 3`** (last 7 days, newest first)
-
-Both lines tick live on the same 1 Hz refresh as the countdown, and
-update immediately when you click the **I drank water now** button.
+The settings window's **Reminders** page shows **3 cups today** in
+large type, with a bar chart of the days before it (the last seven,
+today highlighted) and when the next reminder is due. It updates while
+open, and straight away when you click **I drank water**.
 
 Crossing local midnight closes out the in-progress day into the recent
 list and resets the count to zero. Empty days (zero acks) are skipped
@@ -193,9 +223,9 @@ Security posture:
 ### Workspace badge — who just signaled?
 
 Running several Claude Code sessions across workspaces, all driving
-the same buddy? A small one-letter badge above the buddy's left
-shoulder shows **which workspace last signaled** — so when a wave
-asks for permission, you know which window to switch to.
+the same buddy? A small one-letter badge at the front of the status
+pill shows **which workspace last signaled** — so when a wave asks for
+permission, you know which window to switch to.
 
 - The label comes from the Claude Code hook payload's `cwd`
   automatically (`C:\dev\api` → badge **A**); scripts can override
@@ -206,12 +236,18 @@ asks for permission, you know which window to switch to.
 - **Self-suppressing:** the badge only appears once a *second*
   distinct workspace signals — with one session running, the buddy
   looks exactly as it always did.
+- While the buddy is thinking, the pill carries a chip for **every
+  workspace with a session still working** (up to three), so when one
+  finishes its letter drops out and the others stay.
 - Shows while the buddy is thinking and for ~8 s after a reaction;
   toggle it from the tray (**Workspace Badge**, persisted).
 
 ### Themes
 
-Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
+Clawd Buddy ships with **38 themes**: 8 classic colour palettes and 30
+characters, princesses and animals.
+
+**Classic palettes**, a mix of dark and light:
 
 | # | Theme | Flavor |
 | --- | --- | --- |
@@ -224,17 +260,68 @@ Clawd Buddy ships with **8 color themes** — a mix of dark and light with sever
 | 7 | `solarized` | Muted solarized light |
 | 8 | `sunset` | Warm peach / orange light |
 
+**Characters**, which wear a costume on top of their colours:
+
+| # | Theme | Look |
+| --- | --- | --- |
+| 9 | `nemo` | Orange clownfish with white, black-edged stripes |
+| 10 | `dory` | Royal-blue tang with a black marking and yellow fins |
+| 11 | `batman` | Charcoal cowl with pointed ears and a yellow bat emblem |
+| 12 | `ironman` | Red armour, gold faceplate, glowing eyes and an arc reactor |
+| 13 | `hulk` | Green, with a black spiky fringe and purple shorts |
+| 14 | `spiderman` | Red mask with a black web and blue arms |
+| 15 | `captain` | Blue, red gloves and boots, a star shield on the forehead |
+| 16 | `pikachu` | Electric yellow, black-tipped ears and red cheeks |
+| 17 | `minion` | Yellow, goggles on a black strap and blue overalls |
+| 18 | `walle` | Rusty yellow box with grey binocular eyes |
+| 19 | `superman` | Blue, a red cape and boots, the S shield |
+| 20 | `stitch` | Blue, with huge pink-lined ears and a little nose |
+| 21 | `kirby` | Pink puffball with rosy cheeks and red shoes |
+| 22 | `buzz` | White space suit, purple hood and green panels |
+| 23 | `deadpool` | Red mask with black eye patches and big white eyes |
+
+**Princesses**, with a face, their hair and their gown's colour:
+
+| # | Theme | Look |
+| --- | --- | --- |
+| 24 | `elsa` | Icy blue, platinum hair in a braid over the shoulder |
+| 25 | `ariel` | Sea green, long red hair |
+| 26 | `belle` | Golden gown, long brown hair |
+| 27 | `cinderella` | Pale blue gown, blonde hair and a headband |
+| 28 | `snowwhite` | Blue and yellow, a black bob and a red bow |
+| 29 | `jasmine` | Teal, long black hair and a gold headband |
+| 30 | `rapunzel` | Purple, golden hair so long it pools on the floor |
+
+**Animals**:
+
+| # | Theme | Look |
+| --- | --- | --- |
+| 31 | `panda` | White, black ears and eye patches |
+| 32 | `fox` | Orange, dark-tipped ears and a cream face |
+| 33 | `cat` | Grey tabby with pink ears, stripes and whiskers |
+| 34 | `tiger` | Orange with black stripes, round ears and whiskers |
+| 35 | `penguin` | Black, a white face, an orange beak and feet |
+| 36 | `frog` | Green, with bulging eyes on top |
+| 37 | `bunny` | White, long pink-lined ears and a pink nose |
+| 38 | `lion` | Golden, with a shaggy mane |
+
+The character themes are fan-made tributes and aren't affiliated with or
+endorsed by the owners of those characters.
+
 Pick one at launch:
 
 ```bash
 clawd-buddy --theme dark        # default
 clawd-buddy --theme dracula
 clawd-buddy --theme sunset
+clawd-buddy --theme batman
 ```
 
 Switch at runtime from the **Theme** submenu on the system-tray icon
-(right-click the clawd-buddy tray icon → **Theme** → pick one). The active
-theme is marked as a radio item.
+(right-click the clawd-buddy tray icon → **Theme** → pick one; the
+characters, princesses and animals each have a submenu below the line),
+or from the settings window's **Buddy** page, which switches between
+the four groups. The active theme is marked.
 
 Your choice is **remembered between launches**. The buddy stores the last
 theme in:
@@ -253,7 +340,7 @@ theme, so the override sticks for next time too. First-run default is `dark`.
 | **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | Notification-area icon (pystray) | VBS in Startup folder |
 | **Linux (X11 / XWayland)** | Per-pixel alpha with a compositor (fully transparent background); themed background without one | `_NET_WM_STATE_ABOVE` | StatusNotifierItem over D-Bus (GNOME needs the AppIndicator extension, which Ubuntu enables by default) | `.desktop` in `~/.config/autostart/` |
 
-> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use `Ctrl+2/3/4` to enlarge it if you'd like it bigger.
+> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use the tray **Size** menu (or `Ctrl+2`…`Ctrl+7`) to enlarge it if you'd like it bigger.
 
 > **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px. When a compositing manager is running (GNOME, KDE, Xfce with compositing, picom…), the window uses a 32-bit ARGB visual, so the background is truly transparent. This sets `SDL_VIDEO_X11_WINDOW_VISUALID` and `SDL_FRAMEBUFFER_ACCELERATION=0` automatically.
 
@@ -395,12 +482,16 @@ clawd-buddy --pomodoro W/B   Start a pomodoro cycle on the running buddy.
                              Celebrates at break, waves back to work,
                              repeats until stopped.
 clawd-buddy --pomodoro-stop  End the running buddy's pomodoro cycle.
+clawd-buddy --settings [P]   Open the running buddy's settings window,
+                             optionally on page P (buddy, sound,
+                             reminders, focus, about).
 clawd-buddy --http-port N    (launch flag) Also accept signals over HTTP
                              on 127.0.0.1:N — POST /signal mirrors the
                              TCP protocol, GET /status mirrors --status.
 clawd-buddy --http-token T   (launch flag) Require "Authorization:
                              Bearer T" on every HTTP request. Without a
-                             token, the HTTP quit action is rejected.
+                             token, the HTTP quit and settings actions
+                             are rejected.
 clawd-buddy --workspace L    Attach workspace label L to the outgoing
                              signal (one-letter badge above the buddy
                              when several workspaces are active).
@@ -410,8 +501,9 @@ clawd-buddy --prompt-start   Signal start of a Claude Code prompt — greets
                              enters the thinking animation. Reads
                              session_id from JSON on stdin when run as a
                              hook command.
-clawd-buddy --session-id ID  Override the session id used by --prompt-start
-                             (mostly useful for scripts / tests)
+clawd-buddy --session-id ID  Override the session id sent with
+                             --prompt-start, --send and --wave (mostly
+                             useful for scripts / tests)
 clawd-buddy --top            Tell a running buddy to re-assert always-on-top
 clawd-buddy --quit           Ask a running buddy to exit cleanly
 clawd-buddy --theme THEME    Color theme: dark (default), light, dracula,
@@ -429,12 +521,20 @@ clawd-buddy --help           Show help
 
 | Input | Action |
 | --- | --- |
-| **Drag** | Click anywhere on the buddy and drag to reposition |
-| **Space** | Trigger a test celebration |
-| **Ctrl+1** | Scale to 100% (default) |
-| **Ctrl+2** | Scale to 125% |
-| **Ctrl+3** | Scale to 150% |
-| **Ctrl+4** | Scale to 200% |
+| **Drag** | Click the buddy itself and drag to reposition. It reaches the very top and sides of the screen: where the window manager stops its window, the buddy keeps sliding inside it. Clicks around the buddy go through to whatever is behind it |
+| **Right-click** | Open the settings window |
+| **Space** | Trigger a test celebration (sessions that are working keep thinking afterwards) |
+| **Ctrl+1** | Size S, 1× (default) |
+| **Ctrl+2** | Size M, 1.25× |
+| **Ctrl+3** | Size L, 1.5× |
+| **Ctrl+4** | Size L+, 2× |
+| **Ctrl+5** | Size XL, 3× |
+| **Ctrl+6** | Size XXL, 4× |
+| **Ctrl+7** | Size XXXL, 5×. Its window is taller than a 1080p screen, so it hangs off the bottom and the buddy slides up inside it to stay in view |
+
+The same sizes are in the tray **Size** menu. The size you pick is
+remembered, and the buddy keeps its feet where they were when it grows
+or shrinks.
 | **Escape** | Quit the buddy |
 | **Tray icon** | Right-click the system tray icon for a menu — theme switcher lives here |
 
@@ -469,12 +569,14 @@ src/clawd_buddy/
 ├── config.py       # ~/.config/clawd-buddy persistence
 ├── history.py      # ~/.clawd-buddy/history.json drinking-history store
 ├── ipc.py          # JSON-over-TCP protocol + dispatcher + client
+├── placement.py    # dragging past the work-area edge (character offset)
 ├── webhook.py      # HTTP transport over the same dispatcher (--http-port)
 ├── ui/
-│   ├── themes.py   # 8 color theme registry
+│   ├── themes.py   # theme colours + character costumes
 │   ├── sound.py    # procedural PCM sound-pack generators
-│   ├── drawing.py  # pygame draw routines (buddy + confetti)
-│   ├── about.py    # About dialog + shared buddy icon
+│   ├── drawing.py  # BuddyRenderer: buddy, status pill, bubble, confetti
+│   ├── about.py    # settings & About window + shared buddy icon
+│   ├── tkkit.py    # antialiased tkinter widgets for that window
 │   ├── tray.py     # pystray icon + right-click menu
 │   └── sni.py      # Linux tray backend: StatusNotifierItem + DBusMenu over D-Bus
 └── platform/
@@ -506,6 +608,15 @@ prompt: the running buddy greets when it sees a *new* `session_id` (or
 when none is supplied and there has been no recent activity) and starts
 the thinking animation either way.
 
+`celebrate`, `wave`, `thinking_start` and `thinking_end` accept a
+`session_id` too. The buddy thinks while any session is working, and a
+`celebrate` with a `session_id` ends only that session. A `celebrate`
+without one ends every session (a session that never stops is dropped
+after 10 minutes without a signal).
+
+`{"action": "settings", "page": "focus"}` opens the settings window
+(on a page, if given), which is what `clawd-buddy --settings` sends.
+
 The `status` action is the only one that elicits a response — the
 buddy writes a JSON snapshot back on the same socket before closing:
 
@@ -517,6 +628,7 @@ $ clawd-buddy --status
   "port": 44556,
   "mode": "idle",
   "queue_depth": 0,
+  "working_sessions": 0,
   "last_session_id": "abc-123",
   "last_action": "wave",
   "last_action_ts": 1716595200.0,
@@ -601,26 +713,48 @@ curl -X POST localhost:8787/signal -d '{"action": "celebrate"}'
 
 ### Single instance
 
-Only one buddy can run at a time. If you launch `clawd-buddy` while one is already running, it sends a signal to the existing instance and exits.
+Only one buddy can run at a time. If you launch `clawd-buddy` while one is already running (from a terminal, the dock or the app grid), it opens the running buddy's settings window and exits.
+
+### Dock icon and app launcher (Linux)
+
+On Linux the buddy installs a launcher for itself each time it starts:
+`~/.local/share/applications/clawd-buddy.desktop`, with a 256 px buddy
+icon in `~/.local/share/icons/hicolor/256x256/apps/clawd-buddy.png`. Its
+windows are named `clawd-buddy`, so the dock shows **Clawd Buddy** with
+the buddy icon (not "app.py" with a generic one), and you can find it in
+Activities / the app grid.
+
+- Right-click it in the app grid and choose **Pin to Dash** (or **Add to
+  Favorites**) to keep it on the dock. Clicking it starts the buddy, or
+  opens its settings when it's already running.
+- Right-clicking the dock icon also offers **Settings** and **Quit**.
+- The launcher runs the copy of the buddy that installed it (the
+  `clawd-buddy` script, or `python -m clawd_buddy.app` from that
+  environment), so it's refreshed whenever you start another install.
+- To remove it, delete those two files.
+
+The buddy itself stays off the dock and Alt-Tab while it runs; it's a
+pet, not a window.
 
 ### System tray
 
 The buddy adds a system tray icon with a right-click menu:
 
 - **Test Celebration** — trigger the celebrate animation
+- **Size** — S (1×), M (1.25×), L (1.5×), L+ (2×), XL (3×), XXL (4×) or XXXL (5×); same as Ctrl+1…7, remembered across restarts
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
 - **Center on Screen** — move the buddy to the middle of the screen (recovers a dragged-away or off-screen window)
-- **Theme** — pick one of the 8 themes (current one is checked)
+- **Theme** — pick one of the 38 themes: the 8 classic palettes, then submenus for the characters, princesses and animals (the current one is checked, and its submenu is named after it)
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
   - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.
-- **Reduce Motion** — accessibility toggle. When checked, the buddy stops bobbing, swinging limbs, and spawning confetti; the colored attention border and sounds remain.
-- **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, quiet hours) lives in **About… → Reminders**.
+- **Reduce Motion** — accessibility toggle. When checked, the buddy stops hopping, bobbing, swinging limbs, and spawning confetti; the status pill and sounds remain.
+- **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, overnight pause) lives in the settings window's **Reminders** page.
 - **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss the current alarm. The next scheduled slot still fires on time.
 - **Stop Pomodoro** — *appears only while a pomodoro cycle is running*. Ends the cycle (same as `clawd-buddy --pomodoro-stop`).
 - **Workspace Badge** — toggle the multi-session workspace badge (default on; it only renders once a second workspace signals anyway). Recording continues while hidden, so re-enabling shows current data.
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
-- **About…** — open a tabbed dialog: **About** (version / repo / author) and **Reminders** (edit interval, sound, and quiet hours; live countdown; "Drank now" button).
+- **Settings & About…** — open the [settings window](#settings-window), which has everything in this menu and more (also: right-click the buddy).
 - **Quit** — close the buddy
 
 On Linux the menu is drawn by your panel itself (GNOME, KDE, Xfce,
@@ -638,57 +772,58 @@ Support** extension (Ubuntu ships it enabled).
 
 ## Animations
 
+The buddy is a little terminal with a face on its screen: glowing pill
+eyes, blush, nub arms and feet. Switching between states crossfades the
+pose over about 0.2 s instead of snapping, and a status pill slides in
+above its head.
+
 ### Idle
 
-- Gentle vertical bobbing (sine wave)
-- Periodic blinking (every ~5 seconds)
-- Pupils wander slowly
-- Small mouth line with subtle movement
-- Arms sway gently at sides
+- Slow breathing (a slight squash and stretch)
+- Blinks every few seconds
+- Glances left and right now and then
+- Small smile, arms relaxed at its sides
+- No status pill (unless the workspace badge is showing)
 
 ### Celebrate (on `Stop`)
 
-- Fast bouncing
-- Happy arc eyes (^ ^)
-- Wide smile
-- Both arms waving up
-- Legs kicking
+- Three quick hops with squash on take-off and landing, then a happy sway
+- Happy arc eyes (^ ^), open smile, stronger blush
+- Both arms up, wiggling
 - Confetti burst (40 particles with gravity and drag)
-- Pulsing **green** border around the body
+- **Green** "Done" pill with a check mark, plus a green glow
 - Motivational C-major arpeggio + triad chord (if Sound is enabled)
-- Duration: 3.5 seconds
+- Duration: 5 seconds
 
 ### Wave (on `PermissionRequest`)
 
-- Medium bobbing
-- Wide alert eyes (large pupils, staring)
-- Surprised "o" mouth
-- Right arm waving high
-- Pulsing floating **!** indicator above head
-- Pulsing **yellow** border around the body
+- Small repeated bounce
+- Wide alert eyes and a surprised "o" mouth
+- Right arm raised and waving fast
+- **Yellow** "Needs input" pill with a pulsing **!**, plus a yellow glow
 - Warm two-note doorbell call (if Sound is enabled)
 - Duration: 5 seconds
 
 ### Greet (first prompt of a new session)
 
-- Medium bobbing
-- Small happy arc eyes
-- Smaller smile
-- Right arm raised in a friendly hello
-- Pulsing **cyan** border around the body
+- One hop, then a friendly wave
+- Happy arc eyes and a smile
+- **Cyan** "New session" pill, plus a soft cyan glow
 - Silent (audio is intentionally deferred to a later milestone)
 - Duration: ~1.8 seconds
 - Per-session de-duplication via Claude Code's `session_id`
 
 ### Thinking (between `UserPromptSubmit` and `Stop`)
 
-- Slow, calm bobbing
-- Pupils sweep upward and side-to-side (a "considering" pose)
-- Three small pulsing dots float above the head
-- Soft **purple** border, gentler pulse than the other states
+- Gentle hover while both arms tap away, like typing
+- Narrowed eyes looking up and to the side (a "considering" pose)
+- **Purple** "Thinking…" pill with a spinner ("Thinking ×2" when two
+  sessions are working)
 - Silent
-- Holds indefinitely until `Stop` arrives (with a 10-minute safety cap
-  in case the assistant crashes or the network drops)
+- Holds until every working session's `Stop` arrives, and comes back
+  after any reaction while one is still working (with a 10-minute
+  safety cap per session in case the assistant crashes or the network
+  drops)
 
 > Reactions are **queued** while another animation is playing — up to
 > three pending events play back in the order they arrived.
@@ -696,9 +831,9 @@ Support** extension (Ubuntu ships it enabled).
 ### Speech bubble (any tool, via `--message`)
 
 - Triggered by `clawd-buddy --message "TEXT"`
-- Rounded bubble above the buddy's head with a small downward tail
-- Theme-coloured (uses the active theme's screen background + body
-  border + text colour)
+- Rounded bubble above the buddy's head (above the status pill, when
+  one is showing) with a small downward tail
+- Matches the status pill: dark on dark themes, white on light ones
 - Word-wrapped to **at most two lines**, anything longer is truncated
   with an ellipsis
 - Auto-dismisses after **3 seconds**; sending a new message replaces
@@ -827,6 +962,9 @@ desktop hosts StatusNotifierItem icons:
   `snixembed`).
 - **You set `PYSTRAY_BACKEND`**: the buddy then leaves tray handling to
   pystray. Unset it to get the D-Bus menu back.
+
+Without a tray menu you can still reach every setting: right-click the
+buddy, or run `clawd-buddy --settings`.
 
 ## Disclaimer
 

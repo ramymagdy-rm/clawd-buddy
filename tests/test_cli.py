@@ -290,3 +290,19 @@ class TestReadHookStdin:
     def test_none_stream_returns_empty_dict(self):
         # Some daemonised contexts close stdin (sys.stdin becomes None).
         assert cli.read_hook_stdin(stream=None) == {} or True  # see next
+
+
+# ── --settings ───────────────────────────────────────────────────────
+class TestSettingsFlag:
+    def test_absent_by_default(self):
+        assert cli.parse_args([]).settings is None
+
+    def test_bare_flag_opens_the_buddy_page(self):
+        assert cli.parse_args(["--settings"]).settings == "buddy"
+
+    def test_page(self):
+        assert cli.parse_args(["--settings", "focus"]).settings == "focus"
+
+    def test_unknown_page_is_rejected(self):
+        with pytest.raises(SystemExit):
+            cli.parse_args(["--settings", "nope"])

@@ -216,6 +216,12 @@ class TestQuitGuard:
         assert code == 403
         assert state.should_quit is False
 
+    def test_settings_without_token_403(self, server_factory, state):
+        base = server_factory(token=None)
+        code, _ = _post(f"{base}/signal", {"action": "settings"})
+        assert code == 403
+        assert state._settings_requested is None
+
     def test_quit_with_token_dispatches(self, server_factory, state):
         base = server_factory(token="s3cret")
         code, _ = _post(f"{base}/signal", {"action": "quit"},

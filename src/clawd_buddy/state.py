@@ -47,8 +47,20 @@ DEFAULT_GREET_DUR = 1.8
 # Thinking is ambient with a safety cap — if Stop never arrives
 # (assistant crash, network loss) we don't want to stay in the thinking
 # animation forever. Long enough for legitimate long runs, short enough
-# that a stale state self-recovers within ~10 minutes.
+# that a stale state self-recovers within ~10 minutes. Applied per
+# session: one that hasn't signaled for this long is dropped.
 MAX_THINKING_SECONDS = 600.0
+
+# Several Claude Code sessions can drive one buddy. Each is tracked from
+# its prompt to its own Stop, so one session finishing doesn't end the
+# thinking animation while another is still working. Caps bound memory
+# against a sender inventing session ids.
+WORKING_SESSIONS_MAX = 16
+SEEN_SESSIONS_MAX = 64
+SESSION_ID_MAX = 128
+
+# Most workspace chips the thinking pill shows at once.
+WORKSPACE_CHIPS_MAX = 3
 
 # Without an explicit session id, treat any prompt arriving after this
 # many idle seconds as the start of a new session (so we greet again).
@@ -265,6 +277,15 @@ def _normalize_workspace_label(label):
     return label[:WORKSPACE_LABEL_MAX]
 
 
+def _normalize_session_id(session_id):
+    """A usable session id string, or None. Session ids arrive over IPC
+    / HTTP, so they're capped like every other untrusted field."""
+    if not isinstance(session_id, str):
+        return None
+    session_id = session_id.strip()
+    return session_id[:SESSION_ID_MAX] or None
+
+
 def workspace_badge_color(label):
     """Stable label → RGB tint. Uses crc32 (deterministic across
     processes and platforms) rather than `hash()` (salted per process)
@@ -337,7 +358,15 @@ def _spawn_confetti(n):
 
 
 class BuddyState:
-    SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0}
+    # Size presets: number (Ctrl+1..7, the tray Size menu, config) →
+    # window scale. XXL's 800×1040 window is the largest that still fits
+    # a 1080p screen under a top bar. XXXL's 1000×1300 window doesn't:
+    # it hangs off the bottom of the screen, and the character slides
+    # up inside it to stay visible (see placement.visible_limits).
+    SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0, 5: 3.0, 6: 4.0,
+                     7: 5.0}
+    SCALE_LABELS = {1: "S", 2: "M", 3: "L", 4: "L+", 5: "XL", 6: "XXL",
+                    7: "XXXL"}
 
     def __init__(self, theme_name="dark", sound_pack=None, clock=None,
                  reduce_motion=False, volume=1.0,
@@ -371,8 +400,12 @@ class BuddyState:
         self.theme_name = theme_name
         self.theme = dict(THEMES[theme_name])
         self.scale = 1.0
+        self.scale_preset = 1
         self._scale_changed = False
         self._raise_requested = False
+        # Settings window request from IPC (`--settings`); the main
+        # loop opens it. None, or the page to show ("" = default).
+        self._settings_requested = None
         self._center_requested = False
         # Notification sound — queued from socket / tray / key threads and
         # consumed by the main loop so mixer.play() only runs on one thread.
@@ -387,8 +420,19 @@ class BuddyState:
         # Session-greeting state. last_session_id is what we saw most
         # recently; last_activity_ts is the wall-clock of the last
         # prompt_start (used for the no-session-id fallback).
+        # `_seen_sessions` is every session id greeted this run (a dict
+        # used as an ordered set, oldest first), so two sessions taking
+        # turns don't re-greet each other on every prompt.
         self._last_session_id = None
         self._last_activity_ts = 0.0
+        self._seen_sessions = {}
+
+        # Sessions currently working: session id (None for signals that
+        # carry no id) → {"last": ts of its latest signal, "workspace":
+        # label or None}. Insertion order is start order. The buddy is
+        # thinking whenever this is non-empty and no reaction is
+        # playing; each session leaves on its own Stop.
+        self._working = {}
 
         # M2: speech bubble overlay. Independent of `mode` so a bubble
         # can co-exist with any animation. Empty string = no bubble.
@@ -435,14 +479,6 @@ class BuddyState:
         self.last_workspace = None
         self.last_workspace_ts = 0.0
         self._workspaces_seen = set()
-
-        # M3: when wave/greet preempts thinking, remember to resume the
-        # thinking animation after the cue clears (and any items behind
-        # it in the queue drain). Cleared by celebrate — Stop semantically
-        # ends thinking — or by explicit end_thinking. Without this flag
-        # the buddy fell back to idle after an attention cue even though
-        # Claude was still working.
-        self._resume_thinking = False
 
         # M3: accessibility / comfort preferences.
         # `reduce_motion` strips bob, limb swings, confetti, and ambient
@@ -982,7 +1018,7 @@ class BuddyState:
                 self.pomodoro_cycles += 1
                 self.pomodoro_phase = "break"
                 self._pomodoro_phase_end += self.pomodoro_break_s
-                self.trigger()  # celebrate — volume/quiet-hours apply
+                self.celebrate()  # volume/quiet-hours apply
                 self.set_message(POMODORO_BREAK_TEXT)
             else:
                 self.pomodoro_phase = "work"
@@ -1019,6 +1055,19 @@ class BuddyState:
         if not self.last_workspace:
             return None
         return self.last_workspace[0].upper()
+
+    def workspace_badge_labels(self):
+        """The workspace labels the pill should show chips for, or []
+        when the badge is hidden. While thinking: every workspace with
+        a session still working (start order, at most
+        WORKSPACE_CHIPS_MAX); otherwise the one that signaled last."""
+        if not self.workspace_badge_visible():
+            return []
+        if self.thinking:
+            labels = self.working_workspaces()
+            if labels:
+                return labels[:WORKSPACE_CHIPS_MAX]
+        return [self.last_workspace]
 
     def workspace_badge_visible(self):
         """Whether the drawing layer should render the badge this
@@ -1064,6 +1113,21 @@ class BuddyState:
     def last_session_id(self):
         return self._last_session_id
 
+    @property
+    def working_sessions(self):
+        """How many sessions are working (prompted, no Stop yet)."""
+        return len(self._working)
+
+    def working_workspaces(self):
+        """Distinct workspace labels of the working sessions, in the
+        order they started."""
+        labels = []
+        for entry in self._working.values():
+            ws = entry["workspace"]
+            if ws and ws not in labels:
+                labels.append(ws)
+        return labels
+
     # ── Theme / window ───────────────────────────────────────────
     def set_theme(self, name):
         if name in THEMES:
@@ -1071,13 +1135,19 @@ class BuddyState:
             self.theme = dict(THEMES[name])
 
     def set_scale(self, preset):
-        """Set scale from preset number (1-4)."""
-        if preset in self.SCALE_PRESETS:
+        """Set scale from a preset number (see SCALE_PRESETS). The main
+        loop resizes the window on its next frame."""
+        if preset in self.SCALE_PRESETS and preset != self.scale_preset:
+            self.scale_preset = preset
             self.scale = self.SCALE_PRESETS[preset]
             self._scale_changed = True
 
     def bring_to_front(self):
         self._raise_requested = True
+
+    def open_settings(self, page=None):
+        """Ask the main loop to open (or raise) the settings window."""
+        self._settings_requested = page if isinstance(page, str) else ""
 
     def center_on_screen(self):
         """Request a re-center to the middle of the screen. Like
@@ -1088,14 +1158,28 @@ class BuddyState:
     # ── Public action surface ────────────────────────────────────
     # Each of these is a thin wrapper around _request so callers don't
     # have to know about the queue / preemption rules.
-    def trigger(self, _msg=""):
-        """Celebrate — assistant finished. Preempts thinking/idle, queues
-        behind another reactive mode."""
+    def trigger(self, session_id=None, workspace=None):
+        """Stop — a session finished: celebrate, and stop counting that
+        session as working. Other sessions keep the buddy thinking once
+        the celebration ends. A Stop without a session id (older hook
+        clients, a hand-typed `--send`) can't say which session ended,
+        so it ends them all, as a Stop always did."""
+        self._end_session(session_id)
+        self._request("celebrate")
+        self._settle()
+
+    def celebrate(self):
+        """Play the celebration without ending any session — Space, the
+        tray entry, `--test` and pomodoro breaks. Thinking comes back
+        afterwards if a session is still working."""
         self._request("celebrate")
 
-    def wave(self):
+    def wave(self, session_id=None, workspace=None):
         """Wave for attention. Same priority as celebrate; queues if
-        another reactive mode is already animating."""
+        another reactive mode is already animating. A session waiting on
+        permission is still mid-turn, so this refreshes it if it's
+        working (it doesn't start tracking one)."""
+        self._touch_session(session_id, workspace, add=False)
         self._request("wave")
 
     def greet(self, session_id=None):
@@ -1104,17 +1188,18 @@ class BuddyState:
         the new-session check."""
         self._request("greet", session_id=session_id)
 
-    def start_thinking(self):
-        """Enter the thinking animation. No-op if already thinking; queues
-        behind a reactive mode so thinking resumes after a celebrate/wave
-        clears."""
-        self._request("start_thinking")
+    def start_thinking(self, session_id=None, workspace=None):
+        """Count `session_id` as working. Shows the thinking animation
+        now, or once the current reaction (and the queue) clears."""
+        self._touch_session(session_id, workspace)
+        self._settle()
 
-    def end_thinking(self):
-        """Leave thinking. No-op if not currently thinking. Reactive modes
-        already implicitly end thinking by preempting it, so callers
-        rarely need this directly."""
-        self._request("end_thinking")
+    def end_thinking(self, session_id=None):
+        """Stop counting `session_id` as working — all sessions when no
+        id is given. Leaves thinking if nothing else is working; a
+        reaction that's playing is left alone."""
+        self._end_session(session_id)
+        self._settle()
 
     def set_message(self, text, duration=DEFAULT_BUBBLE_DUR):
         """Show `text` in a speech bubble above the buddy for `duration`
@@ -1146,28 +1231,34 @@ class BuddyState:
         self.last_action = action
         self.last_action_ts = self._clock()
 
-    def prompt_start(self, session_id=None):
+    def prompt_start(self, session_id=None, workspace=None):
         """UserPromptSubmit handler — the wire-once Claude Code entry point.
 
         Decides whether this is the *first* prompt of a session and emits
-        a greet + start_thinking accordingly. Greets when:
-          - session_id is given and differs from the last one we saw, OR
+        a greet accordingly. Greets when:
+          - session_id is given and hasn't been seen this run, OR
           - no session_id is given and we've been idle longer than
             NEW_SESSION_IDLE_SECONDS (or never seen a prompt before).
-        Always starts thinking afterwards.
+        Always counts the session as working (thinking) afterwards.
         """
         now = self._clock()
+        session_id = _normalize_session_id(session_id)
         if session_id:
-            is_new_session = session_id != self._last_session_id
+            is_new_session = session_id not in self._seen_sessions
+            self._seen_sessions.pop(session_id, None)
+            self._seen_sessions[session_id] = True
+            while len(self._seen_sessions) > SEEN_SESSIONS_MAX:
+                del self._seen_sessions[next(iter(self._seen_sessions))]
             self._last_session_id = session_id
         else:
             is_new_session = (self._last_activity_ts == 0.0
                               or now - self._last_activity_ts
                               > NEW_SESSION_IDLE_SECONDS)
         self._last_activity_ts = now
+        self._touch_session(session_id, workspace)
         if is_new_session:
             self._request("greet")
-        self._request("start_thinking")
+        self._settle()
 
     # ── Per-frame tick ───────────────────────────────────────────
     def update(self):
@@ -1175,6 +1266,10 @@ class BuddyState:
         next queued action, enforces the thinking safety cap, and clears
         any expired speech bubble."""
         now = self._clock()
+        # Safety cap: forget sessions that went quiet without a Stop.
+        for key in [k for k, e in self._working.items()
+                    if now - e["last"] > MAX_THINKING_SECONDS]:
+            del self._working[key]
         elapsed = now - self.mode_start
         if self.mode == "celebrating" and elapsed > self.cel_dur:
             self._advance_from_reactive()
@@ -1182,8 +1277,7 @@ class BuddyState:
             self._advance_from_reactive()
         elif self.mode == "greeting" and elapsed > self.greet_dur:
             self._advance_from_reactive()
-        elif self.mode == "thinking" and elapsed > MAX_THINKING_SECONDS:
-            self._enter("idle")
+        self._settle()
 
         if self.bubble_text and now > self._bubble_expiry:
             self.bubble_text = ""
@@ -1205,35 +1299,55 @@ class BuddyState:
         # persist if it lands on a new day.
         self._roll_history_day_if_needed()
 
+    # ── Internal: sessions ───────────────────────────────────────
+    def _touch_session(self, session_id, workspace=None, add=True):
+        """Record a signal from `session_id`: refresh its timestamp and
+        workspace. Starts tracking it when `add` is set."""
+        key = _normalize_session_id(session_id)
+        entry = self._working.get(key)
+        if entry is None:
+            if not add:
+                return
+            if len(self._working) >= WORKING_SESSIONS_MAX:
+                # Drop the session that has been quiet the longest.
+                oldest = min(self._working,
+                             key=lambda k: self._working[k]["last"])
+                del self._working[oldest]
+            entry = self._working[key] = {"last": 0.0, "workspace": None}
+        entry["last"] = self._clock()
+        label = _normalize_workspace_label(workspace)
+        if label:
+            entry["workspace"] = label
+
+    def _end_session(self, session_id):
+        key = _normalize_session_id(session_id)
+        if key is None:
+            self._working.clear()
+        else:
+            self._working.pop(key, None)
+
+    def _ambient_mode(self):
+        return "thinking" if self._working else "idle"
+
+    def _settle(self):
+        """Keep the ambient mode in line with the working sessions. A
+        reaction that's playing is left alone; it picks the ambient mode
+        when it ends."""
+        if self.mode in AMBIENT_MODES and self.mode != self._ambient_mode():
+            self._enter(self._ambient_mode())
+
     # ── Internal: dispatch / queue ───────────────────────────────
     def _request(self, action, **kwargs):
-        """Single entry point for all mode transitions. Either applies
-        the action immediately or enqueues it; see the decision doc."""
-        if action == "end_thinking":
-            self._resume_thinking = False
-            if self.mode == "thinking":
-                self._enter("idle")
+        """Play reaction `action` ("celebrate" | "wave" | "greet") now,
+        preempting idle/thinking, or queue it behind the reaction that's
+        playing. Thinking isn't queued: it's derived from the working
+        sessions whenever a reaction ends."""
+        if action not in _ACTION_TO_MODE:
             return
-
-        if action == "start_thinking":
-            if self.mode == "thinking":
-                self._resume_thinking = False
-                return  # already thinking
-            if self.mode == "idle":
-                self._resume_thinking = False
-                self._enter("thinking")
-                return
+        if self.mode in REACTIVE_MODES:
             self._enqueue(action, kwargs)
             return
-
-        if action in ("celebrate", "wave", "greet"):
-            if self.mode in REACTIVE_MODES:
-                self._enqueue(action, kwargs)
-                return
-            # idle or thinking → apply now (celebrate/wave preempt
-            # thinking; greet preempts thinking too — design doc rule).
-            self._enter_reactive(action, kwargs)
-            return
+        self._enter_reactive(action, kwargs)
 
     def _enter(self, mode):
         self.mode = mode
@@ -1241,19 +1355,7 @@ class BuddyState:
 
     def _enter_reactive(self, action, kwargs):
         """Switch to the reactive mode for `action`, doing any per-action
-        side effects (confetti spawn, pending sound).
-
-        M3: maintain `_resume_thinking` so an attention cue (wave / greet)
-        that interrupts thinking restores thinking when it clears.
-        Celebrate is the Stop signal — semantically ends thinking, so it
-        clears the flag. Only set the flag when transitioning *from*
-        thinking (the initial preemption); chained reactives popped from
-        the queue keep whatever value was set earlier.
-        """
-        if action == "celebrate":
-            self._resume_thinking = False
-        elif action in ("wave", "greet") and self.mode == "thinking":
-            self._resume_thinking = True
+        side effects (confetti spawn, pending sound)."""
         self.mode = _ACTION_TO_MODE[action]
         self.mode_start = self._clock()
         if action == "celebrate":
@@ -1271,35 +1373,18 @@ class BuddyState:
         # greet: silent in M1 — see decision doc §"Visual + audio"
 
     def _enqueue(self, action, kwargs):
-        """Add to the FIFO. Suppresses consecutive `start_thinking`s
-        (they would just resume the same ambient animation) and caps the
-        queue at QUEUE_MAX to bound runaway producers."""
-        if action == "start_thinking":
-            if self._queue and self._queue[-1][0] == "start_thinking":
-                return
+        """Add to the FIFO, capped at QUEUE_MAX to bound runaway
+        producers."""
         if len(self._queue) >= QUEUE_MAX:
             return
         self._queue.append((action, kwargs))
 
     def _advance_from_reactive(self):
-        """A reactive mode just expired. Pop the next queued action and
-        apply it; if the queue is empty, fall back to idle — or to
-        thinking, if a prior wave/greet preempted it (see
-        `_resume_thinking`)."""
-        if not self._queue:
-            if self._resume_thinking:
-                self._resume_thinking = False
-                self._enter("thinking")
-            else:
-                self._enter("idle")
-            return
-        action, kwargs = self._queue.pop(0)
-        if action == "start_thinking":
-            self._resume_thinking = False
-            self._enter("thinking")
-        elif action in ("celebrate", "wave", "greet"):
+        """A reactive mode just expired. Play the next queued reaction;
+        with the queue empty, go back to thinking if any session is
+        still working, otherwise idle."""
+        if self._queue:
+            action, kwargs = self._queue.pop(0)
             self._enter_reactive(action, kwargs)
         else:
-            # end_thinking or unknown — degrade to idle.
-            self._resume_thinking = False
-            self._enter("idle")
+            self._enter(self._ambient_mode())

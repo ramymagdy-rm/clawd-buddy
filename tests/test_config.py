@@ -505,3 +505,27 @@ class TestWorkspaceBadgePref:
         cfg = config.load_config()
         assert cfg["theme"] == "nord"
         assert cfg["workspace_badge"] is False
+
+
+class TestScalePref:
+    def test_default_is_small(self, isolated_config_dir):
+        assert config.load_saved_scale_preset() == 1
+
+    def test_round_trip(self, isolated_config_dir):
+        config.save_scale_pref(6)
+        assert config.load_saved_scale_preset() == 6
+        config.save_scale_pref(7)
+        assert config.load_saved_scale_preset() == 7
+
+    def test_garbage_falls_back(self, isolated_config_dir):
+        for bad in (0, 8, "6", 2.5, True, None):
+            config.save_config({"size": bad})
+            assert config.load_saved_scale_preset() == 1
+
+    def test_save_rejects_unknown(self, isolated_config_dir):
+        config.save_scale_pref(9)
+        assert "size" not in config.load_config()
+
+    def test_presets_match_the_state(self):
+        from clawd_buddy.state import BuddyState
+        assert set(config.SCALE_PRESET_NUMBERS) == set(BuddyState.SCALE_PRESETS)

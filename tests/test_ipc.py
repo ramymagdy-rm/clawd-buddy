@@ -165,8 +165,16 @@ class TestDispatch:
             "celebrate", "wave", "raise", "quit",
             "prompt_start", "greet", "thinking_start", "thinking_end",
             "message", "status", "drank",
-            "pomodoro_start", "pomodoro_stop",
+            "pomodoro_start", "pomodoro_stop", "settings",
         }
+
+    def test_settings_opens_the_window_on_a_page(self, state):
+        assert ipc.dispatch_action(state, "settings", {"page": "focus"})
+        assert state._settings_requested == "focus"
+
+    def test_settings_ignores_unknown_pages(self, state):
+        ipc.dispatch_action(state, "settings", {"page": "../etc"})
+        assert state._settings_requested == ""
 
     def test_message_sets_bubble_text(self, state):
         ipc.dispatch_action(state, "message", {"text": "hello"})
@@ -198,6 +206,37 @@ class TestDispatch:
 
 
 # ── build_status_response ────────────────────────────────────────────
+class TestSessionPassthrough:
+    def test_stop_ends_only_its_session(self, state):
+        ipc.dispatch_action(state, "prompt_start", {"session_id": "a"})
+        ipc.dispatch_action(state, "prompt_start", {"session_id": "b"})
+        ipc.dispatch_action(state, "celebrate", {"session_id": "a"})
+        assert state.working_sessions == 1
+        assert state.queue_depth == 2  # b's greet, then a's celebrate
+
+    def test_untagged_stop_ends_all(self, state):
+        ipc.dispatch_action(state, "prompt_start", {"session_id": "a"})
+        ipc.dispatch_action(state, "celebrate", {})
+        assert state.working_sessions == 0
+
+    def test_workspace_is_attached_to_the_session(self, state):
+        ipc.dispatch_action(state, "prompt_start",
+                            {"session_id": "a", "workspace": "api"})
+        assert state.working_workspaces() == ["api"]
+
+    def test_thinking_actions_take_session_ids(self, state):
+        ipc.dispatch_action(state, "thinking_start", {"session_id": "a"})
+        ipc.dispatch_action(state, "thinking_start", {"session_id": "b"})
+        ipc.dispatch_action(state, "thinking_end", {"session_id": "a"})
+        assert state.mode == "thinking"
+        assert state.working_sessions == 1
+
+    def test_status_reports_working_sessions(self, state):
+        ipc.dispatch_action(state, "prompt_start", {"session_id": "a"})
+        resp = ipc.build_status_response(state)
+        assert resp["working_sessions"] == 1
+
+
 class TestStatusResponse:
     def test_shape(self, state):
         resp = ipc.build_status_response(state, port=12345, topmost=True)

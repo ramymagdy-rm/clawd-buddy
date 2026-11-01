@@ -24,6 +24,7 @@ from ..config import (
     save_quiet_hours_pref,
     save_reduce_motion_pref,
     save_reminder_enabled_pref,
+    save_scale_pref,
     save_sound_pack_pref,
     save_theme_pref,
     save_volume_pref,
@@ -31,7 +32,7 @@ from ..config import (
 )
 from .about import _make_buddy_icon_image, show_about_dialog
 from .sound import SOUND_PACK_NAMES, SOUND_PACK_OFF
-from .themes import THEME_NAMES
+from .themes import CLASSIC_THEMES, THEME_GROUPS, theme_label
 
 
 def _tray_log_path():
@@ -85,7 +86,7 @@ def _create_tray_impl(state):
     img = _make_buddy_icon_image()
 
     def on_celebrate(_icon, _item):
-        state.trigger()
+        state.celebrate()
 
     def on_bring_to_front(_icon, _item):
         state.bring_to_front()
@@ -94,10 +95,8 @@ def _create_tray_impl(state):
         state.center_on_screen()
 
     def on_about(_icon, _item):
-        # M4: pass state so the About dialog's Reminders tab can read
-        # and mutate it. Older callers (tests) can still call
-        # show_about_dialog() without args — that path falls back to
-        # an info-only Reminders tab.
+        # The settings window edits the live state; without a state
+        # (older callers, tests) it shows only the About page.
         show_about_dialog(state)
 
     def on_quit(icon, _item):
@@ -118,14 +117,55 @@ def _create_tray_impl(state):
 
     def _theme_item(name):
         return pystray.MenuItem(
-            name.title(),
+            theme_label(name),
             _make_action(name),
             checked=_make_checker(name),
             radio=True,
         )
 
-    theme_submenu = pystray.Menu(*[
-        _theme_item(name) for name in THEME_NAMES
+    # Classic palettes, then a submenu per group of characters (30 in
+    # one list would run off a laptop screen).
+    def _group_item(title, names):
+        # The group holding the current theme names it: "Animals · Fox".
+        def text(_item):
+            if state.theme_name in names:
+                return f"{title} · {theme_label(state.theme_name)}"
+            return title
+        return pystray.MenuItem(
+            text, pystray.Menu(*[_theme_item(n) for n in names]))
+
+    theme_submenu = pystray.Menu(
+        *[_theme_item(name) for name in CLASSIC_THEMES],
+        pystray.Menu.SEPARATOR,
+        *[_group_item(title, names)
+          for key, title, names in THEME_GROUPS if key != "classic"],
+    )
+
+    # Size submenu — radio list of the size presets. The main loop
+    # resizes on its next frame (window calls stay on that thread).
+    def _make_size_action(preset):
+        def _action(_icon, _item):
+            state.set_scale(preset)
+            save_scale_pref(preset)
+        return _action
+
+    def _make_size_checker(preset):
+        def _checker(_item):
+            return state.scale_preset == preset
+        return _checker
+
+    def _size_label(preset):
+        scale = state.SCALE_PRESETS[preset]
+        return f"{state.SCALE_LABELS[preset]}  ({scale:g}\u00d7)"
+
+    size_submenu = pystray.Menu(*[
+        pystray.MenuItem(
+            _size_label(preset),
+            _make_size_action(preset),
+            checked=_make_size_checker(preset),
+            radio=True,
+        )
+        for preset in state.SCALE_PRESETS
     ])
 
     # Sound submenu — same factory pattern. Clicking a pack switches AND
@@ -281,6 +321,7 @@ def _create_tray_impl(state):
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),
         pystray.MenuItem("Center on Screen", on_center),
+        pystray.MenuItem("Size", size_submenu),
         pystray.MenuItem("Theme", theme_submenu),
         pystray.MenuItem("Sound", sound_submenu),
         pystray.MenuItem(
@@ -300,7 +341,7 @@ def _create_tray_impl(state):
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Clawd Buddy v{APP_VERSION}", None, enabled=False),
-        pystray.MenuItem("About…", on_about),
+        pystray.MenuItem("Settings & About…", on_about),
         pystray.MenuItem("Quit", on_quit),
     )
     icon_cls = _pick_icon_class(pystray)
