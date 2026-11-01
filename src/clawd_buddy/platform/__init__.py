@@ -77,6 +77,27 @@ def _get_screen_size():
     return 1920, 1080
 
 
+def get_work_areas():
+    """Screen rectangles (x, y, w, h) the window manager keeps
+    client-moved windows inside, or [] when it doesn't (Windows) or
+    can't tell. Lets a drag predict where the window will really land.
+    """
+    if sys.platform == "linux":
+        return _impl._linux_get_work_areas()
+    return []
+
+
+def set_input_region(handle, rects):
+    """Make only `rects` (window pixels) of the window clickable, so the
+    transparent area around the buddy doesn't block what's behind it.
+
+    Linux uses the X SHAPE extension. Windows needs nothing: colour-keyed
+    pixels of a layered window already let clicks through."""
+    if sys.platform == "linux":
+        return _impl._linux_set_input_region(handle, rects)
+    return False
+
+
 def raise_window(handle):
     """Force the window above other topmost peers, snapping it back
     on-screen if it has drifted off (e.g. monitor disconnected, dragged

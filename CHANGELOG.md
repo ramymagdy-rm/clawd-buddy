@@ -23,8 +23,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   `scripts/release_tool.py`, and the decisions it makes are tested in
   `tests/test_release_tool.py`.
 
+### Changed
+
+- **A new look, inspired by Codex pets.** The buddy is redrawn as a
+  rounder, softer screen pet: glowing pill eyes and blush on its
+  screen, nub arms and feet, and squash and stretch when it hops. A
+  floating status pill above its head says what the assistant is doing
+  ("Thinking…", "Needs input", "Done", "New session") in the same
+  green / yellow / cyan / purple as before, and replaces the pulsing
+  border. The workspace badge now sits at the front of that pill.
+  Switching states crossfades the pose instead of snapping. With a
+  compositor (Linux) edges are antialiased, and the buddy gets a soft
+  ground shadow and a coloured glow while it reacts. Windows keeps hard
+  edges, because anything translucent would blend into its colour-key
+  background as a dark halo. Ctrl+2/3/4 now render at full resolution
+  instead of upscaling a blurry 1x frame. The tray icon, window icon and
+  README images match the new design.
+- **Much lighter on the CPU.** The main loop used to redraw at 120 FPS
+  all the time; it now runs at 60 FPS only while something moves
+  quickly (a reaction, confetti, a transition, a drag) and at 30 FPS
+  otherwise. Each frame only filters and uploads the part of the window
+  that has something in it.
+- **Faster hooks.** `clawd-buddy --send` / `--wave` / `--prompt-start`
+  no longer import pygame, Pillow or the tray, so each hook call
+  returns sooner (about 55 ms instead of 90 ms here). They also stop
+  printing pygame's "pygame-ce 2.x.x" banner, which Claude Code showed
+  as hook output.
+
 ### Fixed
 
+- **The buddy's invisible window blocked clicks (Linux).** The whole
+  transparent rectangle around the buddy swallowed clicks, so it got in
+  the way of menus and buttons underneath. Only the buddy itself takes
+  input now (X SHAPE input region); clicks anywhere else go through to
+  what's behind it. Windows already let clicks through its colour-keyed
+  background.
+- **The buddy couldn't be dragged near the top of the screen (Linux).**
+  Window managers such as mutter keep a window inside the monitor's work
+  area, and the buddy's window has room above its head for the pill,
+  bubble and confetti, so the buddy itself stopped ~140 px below the top
+  bar. Now, once the window can't go further, the buddy keeps following
+  the pointer inside its own window, up to the top and sides of the
+  screen, and the pill and bubble move below it when there's no room
+  above. The window manager's limits are read per monitor from
+  `_GTK_WORKAREAS_D0` (or `_NET_WORKAREA`) and double-checked after each
+  drag.
 - **Release builds could pick up untracked files.** The documented
   `uv build` ran in the working tree, and hatchling packs every file that
   isn't gitignored into the sdist, so local scratch files could ship to

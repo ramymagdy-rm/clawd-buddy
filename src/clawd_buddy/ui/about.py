@@ -82,11 +82,13 @@ def _make_buddy_icon_image():
     surface type. The pygame main window uses `make_buddy_icon_surface`
     below — same shape, different pixel container.
 
-    The silhouette is authored on a 40×40 grid (body + legs) and scaled
-    to fill the canvas with a 2px margin. Windows shrinks the tray image
-    to ~16–24px, so any padding baked into the 64px source makes the
-    buddy look tiny next to other tray icons. It's drawn 4× oversized
-    and LANCZOS-downsampled so edges stay antialiased at small sizes.
+    It's the in-app character simplified for small sizes: the rounded
+    body, the dark screen with two glowing pill eyes and a smile, and
+    the feet. Authored on a 40×40 grid and scaled to fill the canvas
+    with a 2px margin — Windows shrinks the tray image to ~16–24px, so
+    any padding baked into the 64px source makes the buddy look tiny
+    next to other tray icons. Drawn 4× oversized and LANCZOS-downsampled
+    so edges stay antialiased at small sizes.
     """
     from PIL import Image, ImageDraw
 
@@ -99,15 +101,28 @@ def _make_buddy_icon_image():
     def box(x0, y0, x1, y1):
         return [*p(x0, y0), *p(x1, y1)]
 
+    outer, inner, bevel = (35, 35, 48), (42, 42, 58), (70, 70, 88)
+    screen, face, shoe = (22, 22, 32), (230, 235, 255), (50, 50, 68)
+    blush = (150, 72, 96)
+
     img = Image.new("RGBA", (size * ss, size * ss), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle(box(0, 0, 40, 32), radius=5 * k, fill=(42, 42, 58))
-    d.rounded_rectangle(box(0, 0, 40, 8), radius=5 * k, fill=(70, 70, 92))
-    d.ellipse(box(10, 14, 18, 22), fill=(230, 235, 255))
-    d.ellipse(box(22, 14, 30, 22), fill=(230, 235, 255))
-    d.line([p(16, 26), p(24, 26)], fill=(120, 130, 160), width=round(2 * k))
-    d.line([p(12, 32), p(10, 40)], fill=(35, 35, 48), width=round(3 * k))
-    d.line([p(28, 32), p(30, 40)], fill=(35, 35, 48), width=round(3 * k))
+    d.rounded_rectangle(box(6, 33, 17, 40), radius=3.5 * k, fill=shoe)
+    d.rounded_rectangle(box(23, 33, 34, 40), radius=3.5 * k, fill=shoe)
+    d.rounded_rectangle(box(0, 0, 40, 36), radius=11 * k, fill=outer)
+    d.rounded_rectangle(box(1.5, 1.5, 38.5, 32.5), radius=10 * k, fill=bevel)
+    d.rounded_rectangle(box(1.5, 2.5, 38.5, 32.5), radius=10 * k, fill=inner)
+    d.rounded_rectangle(box(4, 8, 36, 30), radius=7 * k, fill=screen)
+    for x, c in ((8, (255, 95, 86)), (11, (255, 189, 46)), (14, (39, 201, 63))):
+        d.ellipse(box(x - 1, 3.6, x + 1, 5.6), fill=c)
+    d.rounded_rectangle(box(11.5, 13, 16.5, 21), radius=2.5 * k, fill=face)
+    d.rounded_rectangle(box(23.5, 13, 28.5, 21), radius=2.5 * k, fill=face)
+    d.ellipse(box(14.2, 14, 15.8, 15.6), fill=screen)
+    d.ellipse(box(26.2, 14, 27.8, 15.6), fill=screen)
+    d.ellipse(box(6.5, 21.5, 11, 23.8), fill=blush)
+    d.ellipse(box(29, 21.5, 33.5, 23.8), fill=blush)
+    d.arc(box(16.5, 21, 23.5, 26.5), start=20, end=160, fill=face,
+          width=round(1.6 * k))
     return img.resize((size, size), Image.LANCZOS)
 
 

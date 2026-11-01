@@ -55,29 +55,6 @@ def state(clock):
     )
 
 
-# ── rounded_rect ─────────────────────────────────────────────────────
-class TestRoundedRect:
-    def test_basic_call_does_not_crash(self, surface):
-        drawing.rounded_rect(surface, (255, 0, 0), (10, 10, 50, 30), 5)
-
-    def test_zero_radius(self, surface):
-        # r=0 is degenerate (no corners drawn) — should still complete.
-        drawing.rounded_rect(surface, (0, 255, 0), (0, 0, 20, 20), 0)
-
-    def test_radius_clamped_to_half_dimension(self, surface):
-        # rounded_rect clamps r to half the smaller dimension; passing a
-        # large radius shouldn't error.
-        drawing.rounded_rect(surface, (0, 0, 255), (0, 0, 10, 10), 100)
-
-    def test_paints_centre_pixel(self, surface):
-        # A solid filled rect at (10,10) → (60,40) should colour the
-        # middle pixel.
-        color = (123, 45, 200)
-        drawing.rounded_rect(surface, color, (10, 10, 50, 30), 5)
-        px = surface.get_at((35, 25))[:3]
-        assert tuple(px) == color
-
-
 # ── draw_buddy state coverage ────────────────────────────────────────
 class TestDrawBuddyAcrossModes:
     @pytest.mark.parametrize(
@@ -135,9 +112,9 @@ class TestConfettiLifecycle:
 # ── Speech bubble (M2) ───────────────────────────────────────────────
 class TestSpeechBubble:
     def test_no_op_for_empty_text(self, surface, state):
-        # draw_speech_bubble shorts on empty/missing text — easiest way
-        # to assert it is to confirm calling draw_buddy without a bubble
-        # leaves the surface in its pre-call state for the bubble region.
+        # The bubble is skipped on empty text — easiest way to assert it
+        # is to confirm calling draw_buddy without a bubble works and
+        # leaves bubble_text empty.
         before = surface.copy()
         drawing.draw_buddy(surface, 0.0, state, blink=False)
         # We can't compare entire surfaces (the buddy was drawn), but we
@@ -253,15 +230,13 @@ class TestWorkspaceBadge:
         state.record_workspace("web")
         assert state.workspace_badge_visible()
 
-    def test_draw_badge_does_not_crash(self, surface, state):
-        drawing.draw_workspace_badge(
-            surface, "A", (204, 82, 122), 100, 120, state.theme)
-
-    def test_draw_badge_empty_letter_is_noop(self, surface, state):
-        before = pygame.image.tobytes(surface, "RGB")
-        drawing.draw_workspace_badge(
-            surface, None, (204, 82, 122), 100, 120, state.theme)
-        assert pygame.image.tobytes(surface, "RGB") == before
+    def test_badge_alone_shows_a_pill_while_idle(self, surface, state):
+        # Idle has no status text; a visible badge still gets a pill so
+        # the workspace letter has somewhere to live.
+        self._make_visible(state)
+        r = drawing.BuddyRenderer()
+        r.draw(surface, 1000.0, state, blink=False)
+        assert r._pill_key == (None, "W")
 
     def test_draw_buddy_with_visible_badge(self, surface, state):
         self._make_visible(state)
@@ -368,3 +343,209 @@ class TestComposeFrame:
         frame.fill((30, 60, 90))
         drawing.compose_frame(screen, frame, transparent=False)
         assert screen.get_at((19, 19))[:3] == (30, 60, 90)
+
+
+# ── Redesign: renderer, scaling, compositing ─────────────────────────
+class TestRenderer:
+    def test_dirty_rect_covers_the_body(self, surface, state):
+        r = drawing.BuddyRenderer()
+        r.draw(surface, 1000.0, state, blink=False)
+        assert r.dirty is not None
+        assert r.dirty.collidepoint(WIN_W // 2, WIN_H - 100)
+        # Idle with no pill or bubble: the top of the window is untouched,
+        # which is what makes partial compositing cheap.
+        assert r.dirty.top > 60
+
+    def test_dirty_rect_grows_for_pill_and_bubble(self, surface, state):
+        r = drawing.BuddyRenderer()
+        r.draw(surface, 1000.0, state, blink=False)
+        idle_top = r.dirty.top
+        state.start_thinking()
+        state.set_message("hello there")
+        r.draw(surface, 1001.0, state, blink=False)
+        assert r.dirty.top < idle_top
+
+    @pytest.mark.parametrize("scale", [1.25, 1.5, 2.0])
+    def test_renders_at_any_scale(self, state, scale):
+        # Geometry is in logical units; the surface width sets the pixel
+        # scale, so the body lands at the same relative spot.
+        w, h = int(WIN_W * scale), int(WIN_H * scale)
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        surf.fill((0, 0, 0, 0))
+        drawing.BuddyRenderer().draw(surf, 1000.0, state, blink=False)
+        assert surf.get_at((w // 2, int((WIN_H - 100) * scale))).a == 255
+        assert surf.get_at((0, 0)).a == 0
+
+    def test_frame_size_supersamples_only_with_alpha(self):
+        assert drawing.frame_size_for((200, 260), True) == (
+            200 * drawing.SUPERSAMPLE, 260 * drawing.SUPERSAMPLE)
+        assert drawing.frame_size_for((200, 260), False) == (200, 260)
+
+    def test_hard_mode_skips_soft_effects(self, state):
+        # Opaque frames (Windows colour key) must not get translucent
+        # shadows or glows: they'd blend into the key colour and show up
+        # as dark halos. Below the feet only the shadow would paint.
+        state.wave()
+        surf = pygame.Surface((WIN_W, WIN_H))
+        surf.fill((1, 1, 1))
+        drawing.BuddyRenderer().draw(surf, 1000.0, state, blink=False)
+        assert surf.get_at((WIN_W // 2, drawing.GROUND_Y + 2))[:3] == (1, 1, 1)
+
+    def test_soft_mode_paints_ground_shadow(self, state):
+        surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        surf.fill((0, 0, 0, 0))
+        drawing.BuddyRenderer().draw(surf, 1000.0, state, blink=False)
+        assert 0 < surf.get_at((WIN_W // 2, drawing.GROUND_Y + 2)).a < 255
+
+
+class TestFrameRateHint:
+    def _settle(self, r, surface, state, t0, secs=1.0):
+        t = t0
+        while t < t0 + secs:
+            r.draw(surface, t, state, blink=False)
+            t += 1 / 30
+        return t
+
+    def test_idle_settles_to_slow_frames(self, surface, state):
+        r = drawing.BuddyRenderer()
+        self._settle(r, surface, state, 1000.0)
+        assert not r.wants_fast_frames(state)
+
+    def test_thinking_settles_to_slow_frames(self, surface, state):
+        # Regression: the thinking loop's tapping arms must not count as
+        # "still transitioning" and pin the loop at the fast rate.
+        r = drawing.BuddyRenderer()
+        t = self._settle(r, surface, state, 1000.0)
+        state.start_thinking()
+        r.draw(surface, t, state, blink=False)
+        assert r.wants_fast_frames(state)  # transition just started
+        self._settle(r, surface, state, t + 0.01)
+        assert not r.wants_fast_frames(state)
+
+    @pytest.mark.parametrize("action", ["trigger", "wave", "greet"])
+    def test_reactions_run_fast(self, surface, state, action):
+        r = drawing.BuddyRenderer()
+        getattr(state, action)()
+        self._settle(r, surface, state, 1000.0)
+        assert r.wants_fast_frames(state)
+
+
+class TestConfettiFrameRateIndependence:
+    def _fall(self, fps, secs=0.5):
+        p = [100.0, 90.0, 1.0, -4.0, (255, 0, 0), 4]
+        st = buddy_state.BuddyState(theme_name="dark", sound_pack="off")
+        st.confetti = [p]
+        r = drawing.BuddyRenderer()
+        surf = pygame.Surface((WIN_W, WIN_H))
+        n = int(secs * fps)
+        for i in range(n + 1):
+            r.draw(surf, 1000.0 + i / fps, st, blink=False)
+        return p[0], p[1]
+
+    def test_same_trajectory_at_30_and_120_fps(self):
+        x30, y30 = self._fall(30)
+        x120, y120 = self._fall(120)
+        assert x30 == pytest.approx(x120, abs=3)
+        assert y30 == pytest.approx(y120, abs=8)
+
+
+class TestPalette:
+    def test_face_contrasts_with_screen_on_every_theme(self):
+        # The face glows on dark screens and is inked on light ones;
+        # either way it must read clearly.
+        from clawd_buddy.ui.themes import THEMES
+        for name, th in THEMES.items():
+            pal = drawing._palette(th)
+            diff = abs(drawing._lum(pal["face"]) - drawing._lum(th["screen_bg"]))
+            assert diff > 100, name
+
+    def test_mix_never_returns_the_colour_key(self):
+        from clawd_buddy.constants import TKEY
+        assert drawing._mix((0, 0, 0), (2, 2, 2), 0.5) != TKEY
+
+
+class TestComposeDirty:
+    def _render(self, state):
+        frame = pygame.Surface((WIN_W * 2, WIN_H * 2), pygame.SRCALPHA)
+        frame.fill((0, 0, 0, 0))
+        r = drawing.BuddyRenderer()
+        state.start_thinking()
+        r.draw(frame, 1000.0, state, blink=False)
+        return frame, r.dirty
+
+    def test_partial_compose_matches_full_compose(self, state):
+        frame, dirty = self._render(state)
+        full = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        part = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        drawing.compose_frame(full, frame, True)
+        rect = drawing.compose_frame(part, frame, True, dirty)
+        assert pygame.image.tobytes(full, "RGBA") == \
+            pygame.image.tobytes(part, "RGBA")
+        assert rect.w < WIN_W or rect.h < WIN_H
+
+    def test_returns_screen_rect_covering_content(self, state):
+        frame, dirty = self._render(state)
+        screen = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        rect = drawing.compose_frame(screen, frame, True, dirty)
+        assert rect.collidepoint(WIN_W // 2, WIN_H - 100)
+        assert pygame.Rect(0, 0, WIN_W, WIN_H).contains(rect)
+
+
+def test_reduce_motion_never_asks_for_fast_frames(surface, clock):
+    s = buddy_state.BuddyState(theme_name="dark", sound_pack="off",
+                               clock=clock, reduce_motion=True)
+    s.wave()
+    r = drawing.BuddyRenderer()
+    r.draw(surface, 1000.0, s, blink=False)
+    assert not r.wants_fast_frames(s)
+
+
+# ── Character offset inside the window (drag past the WM's limit) ────
+class TestOffset:
+    def _render(self, state, offset):
+        surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        surf.fill((0, 0, 0, 0))
+        r = drawing.BuddyRenderer()
+        r.offset = offset
+        r.draw(surf, 1000.0, state, blink=False)
+        return surf, r
+
+    def test_hit_box_stays_inside_the_window_at_every_limit(self):
+        x0, x1, y0, y1 = drawing.OFFSET_LIMITS
+        for ox, oy in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]:
+            r = drawing.BuddyRenderer()
+            r.offset = (ox, oy)
+            x, y, w, h = r.hit_rect()
+            assert x >= 0 and y >= 0
+            assert x + w <= WIN_W and y + h <= WIN_H
+
+    def test_hit_box_covers_the_body(self, state):
+        surf, r = self._render(state, (0, 0))
+        x, y, w, h = r.hit_rect()
+        assert pygame.Rect(x, y, w, h).collidepoint(WIN_W // 2, WIN_H - 100)
+
+    def test_offset_moves_the_character(self, state):
+        oy = drawing.OFFSET_LIMITS[2]
+        surf, _ = self._render(state, (0, oy))
+        body = (WIN_W // 2, WIN_H - 100 + oy)
+        assert surf.get_at(body).a == 255
+        assert surf.get_at((WIN_W // 2, WIN_H - 100)).a == 0
+
+    def test_pill_and_bubble_flip_below_at_the_top(self, state):
+        state.start_thinking()
+        state.set_message("Drink water!")
+        oy = drawing.OFFSET_LIMITS[2]
+        surf, r = self._render(state, (0, oy))
+        # Everything still fits in the window, and something is painted
+        # below the feet (the pill), nothing above the head.
+        assert r.dirty.top >= 0 and r.dirty.bottom <= WIN_H
+        below = drawing.GROUND_Y + oy + 12
+        row = [surf.get_at((x, int(below))).a for x in range(WIN_W)]
+        assert max(row) == 255
+
+    def test_pill_stays_above_by_default(self, state):
+        state.start_thinking()
+        surf, r = self._render(state, (0, 0))
+        pill_y = drawing.BASE_TOP - drawing.PILL_GAP - drawing.PILL_H / 2
+        row = [surf.get_at((x, int(pill_y))).a for x in range(WIN_W)]
+        assert max(row) == 255
