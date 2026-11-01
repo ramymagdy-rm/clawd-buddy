@@ -26,6 +26,11 @@ and antialiased edges.
 > while a celebrate is still animating), the buddy now **queues** them
 > instead of dropping them — up to three pending reactions play back in
 > the order they arrived.
+>
+> With **several Claude Code sessions** running, each one is tracked from
+> its prompt to its own `Stop` (by the hooks' `session_id`). When one
+> finishes, the buddy celebrates and then goes back to thinking for the
+> others; the pill reads "Thinking ×2" while two are working.
 
 ### Notification sound packs
 
@@ -212,6 +217,9 @@ permission, you know which window to switch to.
 - **Self-suppressing:** the badge only appears once a *second*
   distinct workspace signals — with one session running, the buddy
   looks exactly as it always did.
+- While the buddy is thinking, the pill carries a chip for **every
+  workspace with a session still working** (up to three), so when one
+  finishes its letter drops out and the others stay.
 - Shows while the buddy is thinking and for ~8 s after a reaction;
   toggle it from the tray (**Workspace Badge**, persisted).
 
@@ -416,8 +424,9 @@ clawd-buddy --prompt-start   Signal start of a Claude Code prompt — greets
                              enters the thinking animation. Reads
                              session_id from JSON on stdin when run as a
                              hook command.
-clawd-buddy --session-id ID  Override the session id used by --prompt-start
-                             (mostly useful for scripts / tests)
+clawd-buddy --session-id ID  Override the session id sent with
+                             --prompt-start, --send and --wave (mostly
+                             useful for scripts / tests)
 clawd-buddy --top            Tell a running buddy to re-assert always-on-top
 clawd-buddy --quit           Ask a running buddy to exit cleanly
 clawd-buddy --theme THEME    Color theme: dark (default), light, dracula,
@@ -436,7 +445,7 @@ clawd-buddy --help           Show help
 | Input | Action |
 | --- | --- |
 | **Drag** | Click the buddy itself and drag to reposition. It reaches the very top and sides of the screen: where the window manager stops its window, the buddy keeps sliding inside it. Clicks around the buddy go through to whatever is behind it |
-| **Space** | Trigger a test celebration |
+| **Space** | Trigger a test celebration (sessions that are working keep thinking afterwards) |
 | **Ctrl+1** | Scale to 100% (default) |
 | **Ctrl+2** | Scale to 125% |
 | **Ctrl+3** | Scale to 150% |
@@ -513,6 +522,12 @@ prompt: the running buddy greets when it sees a *new* `session_id` (or
 when none is supplied and there has been no recent activity) and starts
 the thinking animation either way.
 
+`celebrate`, `wave`, `thinking_start` and `thinking_end` accept a
+`session_id` too. The buddy thinks while any session is working, and a
+`celebrate` with a `session_id` ends only that session. A `celebrate`
+without one ends every session (a session that never stops is dropped
+after 10 minutes without a signal).
+
 The `status` action is the only one that elicits a response — the
 buddy writes a JSON snapshot back on the same socket before closing:
 
@@ -524,6 +539,7 @@ $ clawd-buddy --status
   "port": 44556,
   "mode": "idle",
   "queue_depth": 0,
+  "working_sessions": 0,
   "last_session_id": "abc-123",
   "last_action": "wave",
   "last_action_ts": 1716595200.0,
@@ -690,10 +706,13 @@ above its head.
 
 - Gentle hover while both arms tap away, like typing
 - Narrowed eyes looking up and to the side (a "considering" pose)
-- **Purple** "Thinking…" pill with a spinner
+- **Purple** "Thinking…" pill with a spinner ("Thinking ×2" when two
+  sessions are working)
 - Silent
-- Holds indefinitely until `Stop` arrives (with a 10-minute safety cap
-  in case the assistant crashes or the network drops)
+- Holds until every working session's `Stop` arrives, and comes back
+  after any reaction while one is still working (with a 10-minute
+  safety cap per session in case the assistant crashes or the network
+  drops)
 
 > Reactions are **queued** while another animation is playing — up to
 > three pending events play back in the order they arrived.

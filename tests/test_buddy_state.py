@@ -50,6 +50,14 @@ class FakeNowMin:
         self.minute = minute
 
 
+def _drain(state, clock):
+    """Let every playing and queued reaction finish."""
+    for _ in range(buddy_state.QUEUE_MAX + 2):
+        clock.advance(max(state.cel_dur, state.wave_dur, state.greet_dur)
+                      + 0.1)
+        state.update()
+
+
 @pytest.fixture
 def clock():
     return FakeClock()
@@ -170,22 +178,35 @@ class TestQueue:
             state.wave()  # all but the first three should be dropped
         assert state.queue_depth == buddy_state.QUEUE_MAX
 
-    def test_start_thinking_dedupes_against_tail(self, state):
+    def test_start_thinking_is_not_queued(self, state):
+        # Thinking follows the working sessions once a reaction ends;
+        # it never takes a queue slot from a real reaction.
         state.trigger()
         state.start_thinking()
         state.start_thinking()
-        state.start_thinking()
-        # Three calls; the queue should only hold one start_thinking.
-        assert state.queue_depth == 1
+        assert state.queue_depth == 0
 
-    def test_thinking_resumes_after_queued_celebrate(self, state, clock):
-        """start_thinking while a celebrate animates → queue → run after."""
+    def test_thinking_resumes_after_celebrate(self, state, clock):
+        """start_thinking while a celebrate animates → thinking after."""
         state.trigger()
         state.start_thinking()
-        assert state.queue_depth == 1
+        assert state.mode == "celebrating"
         clock.advance(state.cel_dur + 0.1)
         state.update()
         assert state.mode == "thinking"
+
+    def test_queued_reaction_still_plays_after_thinking_starts(
+            self, state, clock):
+        # Regression: a celebrate queued behind start_thinking used to
+        # be stranded once thinking (ambient) took over.
+        state.prompt_start(session_id="a")      # greet
+        state.trigger(session_id="a")           # quick answer: queued
+        clock.advance(state.greet_dur + 0.1)
+        state.update()
+        assert state.mode == "celebrating"
+        clock.advance(state.cel_dur + 0.1)
+        state.update()
+        assert state.mode == "idle"
 
     def test_queue_unwinds_in_fifo_order(self, state, clock):
         state.trigger()
@@ -289,8 +310,8 @@ class TestThinkingResumeAfterAttentionCue:
         # Internal state: resume flag is set. Explicit start_thinking
         # should be idempotent and clear it (we're going to thinking
         # anyway when the wave ends, but the flag should match reality).
-        state.start_thinking()  # queued behind wave
-        assert state.queue_depth == 1
+        state.start_thinking()
+        assert state.queue_depth == 0
         clock.advance(state.wave_dur + 0.1)
         state.update()
         assert state.mode == "thinking"
@@ -335,8 +356,9 @@ class TestPromptStart:
     def test_first_prompt_with_session_id_greets_and_thinks(self, state):
         state.prompt_start(session_id="abc")
         assert state.mode == "greeting"
-        # start_thinking is queued for after the greet finishes.
-        assert state.queue_depth == 1
+        # Thinking follows once the greet finishes.
+        assert state.queue_depth == 0
+        assert state.working_sessions == 1
         assert state.last_session_id == "abc"
 
     def test_repeat_session_id_skips_greet(self, state, clock):
@@ -360,6 +382,21 @@ class TestPromptStart:
         state.prompt_start(session_id="xyz")
         assert state.mode == "greeting"
         assert state.last_session_id == "xyz"
+
+    def test_sessions_taking_turns_greet_only_once(self, state, clock):
+        state.prompt_start(session_id="a")
+        state.prompt_start(session_id="b")
+        _drain(state, clock)
+        state.prompt_start(session_id="a")
+        state.prompt_start(session_id="b")
+        assert state.mode == "thinking"
+        assert state.queue_depth == 0
+
+    def test_seen_sessions_are_capped(self, state):
+        for i in range(buddy_state.SEEN_SESSIONS_MAX + 10):
+            state.prompt_start(session_id=f"s{i}")
+            state.end_thinking()
+        assert len(state._seen_sessions) == buddy_state.SEEN_SESSIONS_MAX
 
     def test_no_session_id_first_call_greets(self, state):
         # Time-based fallback: never seen a prompt ⇒ greet.
@@ -385,6 +422,145 @@ class TestPromptStart:
         clock.advance(buddy_state.NEW_SESSION_IDLE_SECONDS + 1.0)
         state.prompt_start()
         assert state.mode == "greeting"
+
+
+# ── Several sessions at once ─────────────────────────────────────────
+class TestConcurrentSessions:
+    """Two Claude Code sessions drive one buddy. One finishing must not
+    hide that the other is still working."""
+
+    def _settle(self, state, clock):
+        _drain(state, clock)
+
+    def test_one_stop_leaves_the_other_thinking(self, state, clock):
+        state.prompt_start(session_id="a")
+        state.prompt_start(session_id="b")
+        self._settle(state, clock)
+        assert state.mode == "thinking"
+        assert state.working_sessions == 2
+
+        state.trigger(session_id="a")
+        assert state.mode == "celebrating"
+        self._settle(state, clock)
+        assert state.mode == "thinking"
+        assert state.working_sessions == 1
+
+        state.trigger(session_id="b")
+        self._settle(state, clock)
+        assert state.mode == "idle"
+        assert state.working_sessions == 0
+
+    def test_stop_without_session_id_ends_every_session(self, state, clock):
+        # Older hook clients don't say which session stopped.
+        state.prompt_start(session_id="a")
+        state.prompt_start(session_id="b")
+        state.trigger()
+        self._settle(state, clock)
+        assert state.mode == "idle"
+
+    def test_stop_from_unknown_session_keeps_the_rest(self, state, clock):
+        # e.g. a session that was mid-turn when the buddy started.
+        state.prompt_start(session_id="a")
+        state.trigger(session_id="zzz")
+        self._settle(state, clock)
+        assert state.mode == "thinking"
+
+    def test_permission_wave_resumes_thinking(self, state, clock):
+        state.prompt_start(session_id="a")
+        state.prompt_start(session_id="b")
+        self._settle(state, clock)
+        state.wave(session_id="b")
+        assert state.mode == "waving"
+        self._settle(state, clock)
+        assert state.mode == "thinking"
+        assert state.working_sessions == 2
+
+    def test_wave_does_not_start_a_session(self, state, clock):
+        state.wave(session_id="a")
+        self._settle(state, clock)
+        assert state.mode == "idle"
+        assert state.working_sessions == 0
+
+    def test_end_thinking_for_one_session(self, state, clock):
+        state.start_thinking(session_id="a")
+        state.start_thinking(session_id="b")
+        state.end_thinking(session_id="a")
+        assert state.mode == "thinking"
+        state.end_thinking(session_id="b")
+        assert state.mode == "idle"
+
+    def test_quiet_session_expires_alone(self, state, clock):
+        state.start_thinking(session_id="a")
+        clock.advance(buddy_state.MAX_THINKING_SECONDS - 60)
+        state.start_thinking(session_id="b")
+        clock.advance(120)
+        state.update()
+        # a went quiet past the cap; b is still within it.
+        assert state.working_sessions == 1
+        assert state.mode == "thinking"
+        clock.advance(buddy_state.MAX_THINKING_SECONDS)
+        state.update()
+        assert state.mode == "idle"
+
+    def test_new_prompt_refreshes_the_cap(self, state, clock):
+        state.prompt_start(session_id="a")
+        clock.advance(buddy_state.MAX_THINKING_SECONDS - 10)
+        state.update()
+        state.prompt_start(session_id="a")
+        clock.advance(60)
+        state.update()
+        assert state.mode == "thinking"
+
+    def test_working_sessions_are_capped(self, state):
+        for i in range(buddy_state.WORKING_SESSIONS_MAX + 5):
+            state.start_thinking(session_id=f"s{i}")
+        assert state.working_sessions == buddy_state.WORKING_SESSIONS_MAX
+
+    def test_session_ids_are_normalized(self, state):
+        state.start_thinking(session_id="  a  ")
+        state.end_thinking(session_id="a")
+        assert state.working_sessions == 0
+        state.start_thinking(session_id="x" * 1000)
+        state.end_thinking(session_id="x" * buddy_state.SESSION_ID_MAX)
+        assert state.working_sessions == 0
+
+    def test_non_string_session_id_counts_as_untagged(self, state):
+        state.start_thinking(session_id=42)
+        assert state.working_sessions == 1
+        state.end_thinking(session_id=None)
+        assert state.working_sessions == 0
+
+
+class TestCelebrateKeepsSessions:
+    """Space, the tray entry, --test and pomodoro breaks only play the
+    celebration; they mustn't end anyone's thinking."""
+
+    def test_celebrate_returns_to_thinking(self, state, clock):
+        state.prompt_start(session_id="a")
+        state.prompt_start(session_id="b")
+        _drain(state, clock)
+        state.celebrate()
+        assert state.mode == "celebrating"
+        clock.advance(state.cel_dur + 0.1)
+        state.update()
+        assert state.mode == "thinking"
+        assert state.working_sessions == 2
+
+    def test_celebrate_from_idle_returns_to_idle(self, state, clock):
+        state.celebrate()
+        clock.advance(state.cel_dur + 0.1)
+        state.update()
+        assert state.mode == "idle"
+
+    def test_pomodoro_break_keeps_thinking(self, state, clock):
+        state.start_thinking(session_id="a")
+        state.start_pomodoro(work_s=60, break_s=60)
+        clock.advance(61)
+        state.update()
+        assert state.mode == "celebrating"
+        clock.advance(state.cel_dur + 0.1)
+        state.update()
+        assert state.mode == "thinking"
 
 
 # ── Speech bubble (M2: --message) ────────────────────────────────────
@@ -1650,6 +1826,51 @@ class TestWorkspaceBadgeVisibility:
         assert state.workspace_badge_letter() == "A"
         state.record_workspace("Web")
         assert state.workspace_badge_letter() == "W"
+
+
+class TestWorkspaceBadgeLabels:
+    def test_thinking_shows_every_working_workspace(self, state):
+        state.prompt_start(session_id="a", workspace="api")
+        state.record_workspace("api")
+        state.prompt_start(session_id="b", workspace="web")
+        state.record_workspace("web")
+        state.update()
+        state._enter("thinking")
+        assert state.workspace_badge_labels() == ["api", "web"]
+
+    def test_finished_workspace_leaves_the_pill(self, state, clock):
+        state.prompt_start(session_id="a", workspace="api")
+        state.record_workspace("api")
+        state.prompt_start(session_id="b", workspace="web")
+        state.record_workspace("web")
+        _drain(state, clock)
+        state.record_workspace("api")  # as dispatch_action does
+        state.trigger(session_id="a", workspace="api")
+        # The celebration is badged with the session that finished...
+        assert state.workspace_badge_labels() == ["api"]
+        _drain(state, clock)
+        # ...and the thinking that follows with the one still working.
+        assert state.mode == "thinking"
+        assert state.workspace_badge_labels() == ["web"]
+
+    def test_same_workspace_twice_is_one_chip(self, state):
+        state.record_workspace("api")
+        state.record_workspace("web")
+        state.start_thinking(session_id="a", workspace="api")
+        state.start_thinking(session_id="b", workspace="api")
+        assert state.workspace_badge_labels() == ["api"]
+
+    def test_chips_are_capped(self, state):
+        for i, ws in enumerate(("api", "web", "cli", "docs", "infra")):
+            state.record_workspace(ws)
+            state.start_thinking(session_id=str(i), workspace=ws)
+        assert (len(state.workspace_badge_labels())
+                == buddy_state.WORKSPACE_CHIPS_MAX)
+
+    def test_hidden_badge_has_no_labels(self, state):
+        state.record_workspace("api")
+        state.start_thinking(session_id="a", workspace="api")
+        assert state.workspace_badge_labels() == []
 
 
 class TestWorkspaceBadgeColor:

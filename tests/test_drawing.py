@@ -236,7 +236,33 @@ class TestWorkspaceBadge:
         self._make_visible(state)
         r = drawing.BuddyRenderer()
         r.draw(surface, 1000.0, state, blink=False)
-        assert r._pill_key == (None, "W")
+        assert r._pill_key == (None, ("web",))
+
+    def test_two_working_sessions_show_both_chips_and_a_count(
+            self, surface, state):
+        state.record_workspace("api")
+        state.record_workspace("web")
+        state.start_thinking(session_id="a", workspace="api")
+        state.start_thinking(session_id="b", workspace="web")
+        r = drawing.BuddyRenderer()
+        r.draw(surface, 1000.0, state, blink=False)
+        assert r._pill_key == ("Thinking \u00d72", ("api", "web"))
+
+    def test_one_working_session_is_plain_thinking(self, surface, state):
+        state.start_thinking(session_id="a")
+        r = drawing.BuddyRenderer()
+        r.draw(surface, 1000.0, state, blink=False)
+        assert r._pill_key == ("Thinking…", ())
+
+    def test_widest_pill_fits_the_window(self, surface, state):
+        for i, ws in enumerate(("api", "web", "cli", "docs")):
+            state.record_workspace(ws)
+            state.start_thinking(session_id=str(i), workspace=ws)
+        r = drawing.BuddyRenderer()
+        pen = drawing._Pen(surface)
+        _, labels, w = r._pill_content(state, state.mode, 0.0, pen)
+        assert len(labels) == 3
+        assert w <= WIN_W - 2 * drawing._EDGE_MARGIN
 
     def test_draw_buddy_with_visible_badge(self, surface, state):
         self._make_visible(state)

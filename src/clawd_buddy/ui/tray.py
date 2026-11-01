@@ -85,7 +85,7 @@ def _create_tray_impl(state):
     img = _make_buddy_icon_image()
 
     def on_celebrate(_icon, _item):
-        state.trigger()
+        state.celebrate()
 
     def on_bring_to_front(_icon, _item):
         state.bring_to_front()
