@@ -382,7 +382,15 @@ class ControlCenter:
         self.tk = tk
         self.root = root
         self.state = state
-        palette = tkkit.DARK if tkkit.system_prefers_dark() else tkkit.LIGHT
+        # No text fields here, so no input method either. On X11 Tk
+        # otherwise asks the input method (ibus, fcitx) for a context
+        # for every widget it shows; when that daemon is busy, the
+        # window took over 40 seconds to appear.
+        try:
+            root.tk.call("tk", "useinputmethods", "-displayof", root, 0)
+        except tk.TclError:
+            pass
+        palette =tkkit.DARK if tkkit.system_prefers_dark() else tkkit.LIGHT
         self.kit = kit = tkkit.Kit(root, palette)
         self.k = tkkit
         self.p = p = palette

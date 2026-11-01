@@ -94,6 +94,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **The settings window could take 40 seconds to open (Linux).** Tk
+  asks the input method (ibus, fcitx) for a context for every widget,
+  so a busy input-method daemon stalled the window. It has no text
+  fields, so it now opts out of input methods and opens in about a
+  second regardless.
+
 - **The buddy's invisible window blocked clicks (Linux).** The whole
   transparent rectangle around the buddy swallowed clicks, so it got in
   the way of menus and buttons underneath. Only the buddy itself takes
