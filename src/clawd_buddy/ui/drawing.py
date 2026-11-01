@@ -41,6 +41,7 @@ import pygame
 
 from ..constants import TKEY, WIN_H, WIN_W
 from ..state import workspace_badge_color
+from .themes import costume as _costume
 
 
 # Transparent frames are drawn at this multiple of the window size and
@@ -587,6 +588,7 @@ class BuddyRenderer:
         pen = _Pen(surf)
         th = state.theme
         pal = _palette(th)
+        cos = _costume(state.theme_name)
         cx = WIN_W / 2
         ox, oy = self.offset
 
@@ -605,9 +607,11 @@ class BuddyRenderer:
             self._draw_glow(pen, mode, t, cx, body_y + bh / 2, reduced)
         self._draw_feet(pen, th, cx + pose["sway"], feet_y)
         self._draw_arms(pen, th, body_x, body_y, bw, bh, pose)
-        self._draw_body(pen, th, pal, body_x, body_y, bw, bh)
+        if cos.get("ears"):
+            _draw_ears(pen, cos, body_x, body_y, bw)
+        self._draw_body(pen, th, pal, body_x, body_y, bw, bh, cos)
         self._draw_face(pen, th, pal, body_x, body_y, bw, bh, pose, mode,
-                        t, blink)
+                        t, blink, cos)
 
         # The pill and bubble are laid out in window space: above the
         # head when there's room, otherwise below the feet (the
@@ -739,20 +743,33 @@ class BuddyRenderer:
             ey = py + math.cos(ang) * length
             pen.capsule(th["limb"], px, py, ex, ey, thick)
 
-    def _draw_body(self, pen, th, pal, bx, by, bw, bh):
+    def _draw_body(self, pen, th, pal, bx, by, bw, bh, cos=None):
+        cos = cos or {}
         r = BODY_R * min(bw / BODY_W, bh / BODY_H)
         pen.rrect(th["body_outer"], bx, by, bw, bh, r)
         # Inner shell: a lighter bevel line along the top, and a thicker
         # rim left at the bottom so the body reads as a chunky device.
         pen.rrect(pal["bevel"], bx + 2.5, by + 2.5, bw - 5, bh - 7.5, r - 2)
-        pen.rrect(th["body_inner"], bx + 2.5, by + 4, bw - 5, bh - 9, r - 2)
-        for i, c in enumerate(_TRAFFIC):
-            pen.circle(c, bx + 13 + i * 6.5, by + 9.5, 1.9)
+        inner = (bx + 2.5, by + 4, bw - 5, bh - 9, r - 2)
+        pen.rrect(th["body_inner"], *inner)
+        for band in cos.get("bands", ()):
+            _draw_band(pen, inner, *band)
+        if cos.get("traffic", True):
+            for i, c in enumerate(_TRAFFIC):
+                pen.circle(c, bx + 13 + i * 6.5, by + 9.5, 1.9)
+        if cos.get("hair"):
+            _draw_hair(pen, cos["hair"], bx, by, bw)
+        if cos.get("emblem"):
+            _draw_emblem(pen, cos["emblem"], th, bx + bw / 2, by + 10)
 
-    def _draw_face(self, pen, th, pal, bx, by, bw, bh, pose, mode, t, blink):
+    def _draw_face(self, pen, th, pal, bx, by, bw, bh, pose, mode, t, blink,
+                   cos=None):
+        cos = cos or {}
         sx, sy = bx + 8, by + 16
         sw, sh = bw - 16, bh - 27
         pen.rrect(th["screen_bg"], sx, sy, sw, sh, 13)
+        if cos.get("web"):
+            _draw_web(pen, cos["web"], sx, sy, sw, sh)
 
         fc = pal["face"]
         cx = sx + sw / 2
@@ -788,8 +805,9 @@ class BuddyRenderer:
                     pen.circle(pal["sparkle"], ex + 1.3, ey - h / 2 + 3.4, 1.7)
 
         # Blush under the eyes (pre-mixed, so no alpha on the frame).
+        blush = cos.get("blush", pal["blush"])
         for dx in (-23, 23):
-            pen.ellipse(pal["blush"], cx + dx + lx * 0.5 - 4.5, ey + 6, 9, 4.5)
+            pen.ellipse(blush, cx + dx + lx * 0.5 - 4.5, ey + 6, 9, 4.5)
 
         my = sy + sh * 0.8 + pose["look_y"] * 0.4
         mx = cx + lx * 0.6
@@ -900,6 +918,148 @@ class BuddyRenderer:
                         (p[0] + ca * hw + sa * hh, p[1] + sa * hw - ca * hh),
                     ])
         state.confetti = alive
+
+
+# ── character costumes (see themes.COSTUMES) ─────────────────────────
+def _rrect_span(x, rx, ry, rw, rh, r):
+    """Top and bottom y of a rounded rectangle at column x, or None."""
+    if x < rx or x > rx + rw:
+        return None
+    if x < rx + r:
+        dx = rx + r - x
+    elif x > rx + rw - r:
+        dx = x - (rx + rw - r)
+    else:
+        dx = 0.0
+    dy = r - math.sqrt(max(0.0, r * r - dx * dx))
+    return ry + dy, ry + rh - dy
+
+
+def _clipped_band(rect, x0, x1, y0, y1, steps=12):
+    """Polygon of the box (x0..x1, y0..y1) cut to the rounded `rect`."""
+    top, bottom = [], []
+    for i in range(steps + 1):
+        x = x0 + (x1 - x0) * i / steps
+        span = _rrect_span(x, *rect)
+        if span is None:
+            continue
+        t, b = max(y0, span[0]), min(y1, span[1])
+        if t < b:
+            top.append((x, t))
+            bottom.append((x, b))
+    return top + bottom[::-1] if len(top) > 1 else None
+
+
+def _draw_band(pen, rect, f0, f1, g0, g1, fill, edge):
+    """A stripe across the shell; f/g are fractions of `rect`'s box."""
+    rx, ry, rw, rh, _ = rect
+    x0, x1 = rx + rw * f0, rx + rw * f1
+    y0, y1 = ry + rh * g0, ry + rh * g1
+    if edge:
+        poly = _clipped_band(rect, x0 - 1.6, x1 + 1.6, y0, y1)
+        if poly:
+            pen.polygon(edge, poly)
+    poly = _clipped_band(rect, x0, x1, y0, y1)
+    if poly:
+        pen.polygon(fill, poly)
+
+
+def _draw_ears(pen, cos, bx, by, bw):
+    """Ears (or a fin) behind the head; their bases hide under it."""
+    kind, color = cos["ears"], cos.get("ear", (30, 30, 36))
+    if kind == "fin":
+        pen.polygon(color, [(bx + bw * 0.44, by + 8), (bx + bw * 0.58, by - 9),
+                            (bx + bw * 0.66, by - 7), (bx + bw * 0.78, by + 6)])
+        return
+    for side in (-1, 1):
+        def at(f, y):
+            return (bx + bw / 2 + side * (f - 0.5) * -bw, y)
+        if kind == "bat":
+            pen.polygon(color, [at(0.13, by + 12), at(0.19, by - 12),
+                                at(0.40, by + 5)])
+        elif kind == "pointy":
+            base_a, base_b = at(0.17, by + 10), at(0.42, by + 4)
+            tip = at(-0.04, by - 13)
+            pen.polygon(color, [base_a, tip, base_b])
+            tip_color = cos.get("ear_tip")
+            if tip_color:
+                k = 0.6
+                a = (base_a[0] + (tip[0] - base_a[0]) * k,
+                     base_a[1] + (tip[1] - base_a[1]) * k)
+                b = (base_b[0] + (tip[0] - base_b[0]) * k,
+                     base_b[1] + (tip[1] - base_b[1]) * k)
+                pen.polygon(tip_color, [a, tip, b])
+
+
+def _draw_hair(pen, color, bx, by, bw):
+    """A spiky fringe that follows the curve of the head."""
+    head = (bx - 1, by - 1, bw + 2, 40, BODY_R)
+    n = 16
+    top, bottom = [], []
+    for i in range(n + 1):
+        x = bx + 1 + (bw - 2) * i / n
+        edge = _rrect_span(x, *head)[0]
+        mid = 1 - abs(i / n - 0.5) * 2          # 0 at the sides, 1 mid
+        spike = (5 + 3 * mid) if i % 2 else 0.5
+        top.append((x, edge - spike))
+        bottom.append((x, edge + 9 + 3 * mid + (2.5 if i % 4 == 1 else 0)))
+    pen.polygon(color, top + bottom[::-1])
+
+
+_BAT = ((-10, -1), (-6, -3.2), (-3, -2), (-1.5, -3.8), (-0.8, -2.2),
+        (0.8, -2.2), (1.5, -3.8), (3, -2), (6, -3.2), (10, -1), (7, 0.7),
+        (5.5, 0), (4, 1.9), (2, 1.2), (0, 3.1), (-2, 1.2), (-4, 1.9),
+        (-5.5, 0), (-7, 0.7))
+
+
+def _star(cx, cy, r_out, r_in):
+    pts = []
+    for i in range(10):
+        r = r_out if i % 2 == 0 else r_in
+        a = -math.pi / 2 + i * math.pi / 5
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return pts
+
+
+def _draw_emblem(pen, kind, th, x, y):
+    """A small emblem on the forehead, centred on (x, y)."""
+    if kind == "bat":
+        pen.ellipse((20, 20, 24), x - 14, y - 6, 28, 12)
+        pen.ellipse(th["mouth_happy"], x - 13, y - 5, 26, 10)
+        pen.polygon((20, 20, 24), [(x + dx, y + dy) for dx, dy in _BAT])
+    elif kind == "reactor":
+        if pen.soft:
+            spr = _soft_blob(pen.p(26), pen.p(20), (120, 230, 255), 170)
+            pen.blit_center(spr, x, y)
+        pen.circle((70, 80, 92), x, y, 5.6)
+        pen.circle((190, 245, 255), x, y, 4.4)
+        pen.circle((110, 222, 255), x, y, 3.0)
+        pen.circle((255, 255, 255), x, y, 1.5)
+    elif kind == "star":
+        pen.circle((196, 30, 40), x, y, 5.8)
+        pen.circle((245, 245, 250), x, y, 4.5)
+        pen.circle((196, 30, 40), x, y, 3.5)
+        pen.circle(th["body_outer"], x, y, 2.6)
+        pen.polygon((255, 255, 255), _star(x, y, 2.5, 1.0))
+
+
+def _draw_web(pen, color, sx, sy, sw, sh):
+    """A spider web on the screen, centred between the eyes."""
+    cx, cy = sx + sw / 2, sy + sh * 0.42
+    angles = [i * math.pi / 4 + math.pi / 8 for i in range(8)]
+    rays = []
+    for a in angles:
+        dx, dy = math.cos(a), math.sin(a)
+        # Distance from the centre to the screen edge along this ray.
+        tx = ((sx + sw - 3 - cx) / dx) if dx > 0 else ((sx + 3 - cx) / dx)
+        ty = ((sy + sh - 3 - cy) / dy) if dy > 0 else ((sy + 3 - cy) / dy)
+        reach = min(tx, ty)
+        rays.append((dx, dy, reach))
+        pen.capsule(color, cx, cy, cx + dx * reach, cy + dy * reach, 0.9)
+    for frac in (0.38, 0.72):
+        ring = [(cx + dx * reach * frac, cy + dy * reach * frac)
+                for dx, dy, reach in rays]
+        pen.polyline(color, ring + ring[:1], 0.9)
 
 
 def _hop(u, period, height):
