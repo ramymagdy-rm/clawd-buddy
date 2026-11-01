@@ -77,3 +77,62 @@ class TestHelpers:
 
     def test_is_known_theme_false(self):
         assert themes_mod.is_known_theme("rainbow-glitter") is False
+
+
+# ── Character themes and costumes ────────────────────────────────────
+_COSTUME_KEYS = {"traffic", "bands", "ears", "ear", "ear_tip", "hair",
+                 "emblem", "web", "blush", "accent"}
+
+
+def _is_rgb(c):
+    return (isinstance(c, tuple) and len(c) == 3
+            and all(isinstance(v, int) and 0 <= v <= 255 for v in c))
+
+
+class TestCharacterThemes:
+    def test_groups_cover_every_theme_in_order(self):
+        assert (list(themes_mod.CLASSIC_THEMES)
+                + list(themes_mod.CHARACTER_THEMES)) == themes_mod.THEME_NAMES
+
+    def test_the_characters_are_there(self):
+        for name in ("nemo", "dory", "batman", "ironman", "hulk",
+                     "spiderman", "captain", "pikachu"):
+            assert name in themes_mod.CHARACTER_THEMES
+
+    def test_every_character_has_a_costume(self):
+        for name in themes_mod.CHARACTER_THEMES:
+            assert themes_mod.costume(name), name
+
+    def test_classic_themes_wear_nothing(self):
+        for name in themes_mod.CLASSIC_THEMES:
+            assert themes_mod.costume(name) == {}
+
+    def test_labels(self):
+        assert themes_mod.theme_label("ironman") == "Iron Man"
+        assert themes_mod.theme_label("spiderman") == "Spider-Man"
+        assert themes_mod.theme_label("dracula") == "Dracula"
+
+    @pytest.mark.parametrize("name", list(themes_mod.THEMES))
+    def test_swatch_colors_are_rgb(self, name):
+        fill, accent = themes_mod.swatch_colors(name)
+        assert _is_rgb(fill) and _is_rgb(accent)
+
+
+class TestCostumes:
+    @pytest.mark.parametrize("name", list(themes_mod.COSTUMES))
+    def test_known_theme_and_parts(self, name):
+        assert name in themes_mod.THEMES
+        c = themes_mod.COSTUMES[name]
+        assert set(c) <= _COSTUME_KEYS, set(c) - _COSTUME_KEYS
+        assert c.get("ears") in (None, "bat", "pointy", "fin")
+        assert c.get("emblem") in (None, "bat", "reactor", "star")
+        for key in ("ear", "ear_tip", "hair", "web", "blush", "accent"):
+            if key in c:
+                assert _is_rgb(c[key]), (name, key)
+
+    @pytest.mark.parametrize("name", list(themes_mod.COSTUMES))
+    def test_bands_are_fractions_and_colours(self, name):
+        for band in themes_mod.COSTUMES[name].get("bands", ()):
+            f0, f1, g0, g1, fill, edge = band
+            assert 0 <= f0 < f1 <= 1 and 0 <= g0 < g1 <= 1
+            assert _is_rgb(fill) and (edge is None or _is_rgb(edge))

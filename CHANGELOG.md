@@ -32,6 +32,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   800×1040 window is the largest that fits a 1080p screen under a top
   bar.
 
+- **Character themes.** Eight new themes dress the buddy up as
+  characters: **Nemo** (orange with white, black-edged stripes), **Dory**
+  (blue with a black marking and yellow fins), **Batman** (cowl ears and
+  a yellow bat emblem), **Iron Man** (red armour, gold faceplate, arc
+  reactor), **Hulk** (black spiky hair, purple shorts), **Spider-Man**
+  (a web across the mask, blue arms), **Captain** (a star shield, red
+  gloves and boots) and **Pikachu** (black-tipped ears, red cheeks).
+  Besides colours, each wears a small costume drawn on top: stripes,
+  ears, hair, an emblem or a web. They're listed below the classic
+  palettes in the tray's Theme menu, in their own row in the settings
+  window, and work with `--theme`. They're fan-made tributes, not
+  affiliated with the characters' owners.
+
 - **A settings window that controls everything.** The old About dialog
   is now a modern window with a sidebar and five pages. **Buddy** shows
   what the buddy is doing (a chip per working workspace) and has

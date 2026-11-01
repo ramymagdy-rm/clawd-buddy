@@ -32,7 +32,7 @@ from ..config import (
 )
 from .about import _make_buddy_icon_image, show_about_dialog
 from .sound import SOUND_PACK_NAMES, SOUND_PACK_OFF
-from .themes import THEME_NAMES
+from .themes import CHARACTER_THEMES, CLASSIC_THEMES, theme_label
 
 
 def _tray_log_path():
@@ -117,15 +117,18 @@ def _create_tray_impl(state):
 
     def _theme_item(name):
         return pystray.MenuItem(
-            name.title(),
+            theme_label(name),
             _make_action(name),
             checked=_make_checker(name),
             radio=True,
         )
 
-    theme_submenu = pystray.Menu(*[
-        _theme_item(name) for name in THEME_NAMES
-    ])
+    # Classic palettes, then the character themes.
+    theme_submenu = pystray.Menu(
+        *[_theme_item(name) for name in CLASSIC_THEMES],
+        pystray.Menu.SEPARATOR,
+        *[_theme_item(name) for name in CHARACTER_THEMES],
+    )
 
     # Size submenu — radio list of the size presets. The main loop
     # resizes on its next frame (window calls stay on that thread).

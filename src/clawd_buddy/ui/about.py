@@ -687,14 +687,26 @@ class ControlCenter:
             ctrl, kit, [(n, st.SCALE_LABELS[n]) for n in st.SCALE_PRESETS],
             lambda: st.scale_preset, self._set_size)
         c["size"].pack()
-        from .themes import THEMES
+        from .themes import (CHARACTER_THEMES, CLASSIC_THEMES,
+                             swatch_colors, theme_label)
         ctrl, _ = self._row(look, "Theme", stacked=True)
-        c["theme"] = k.Swatches(ctrl, kit, [
-            (name, name.title(), _rgb_hex(t["body_inner"]),
-             _rgb_hex(t["mouth_happy"]))
-            for name, t in THEMES.items()],
-            lambda: st.theme_name, self._set_theme)
-        c["theme"].pack(anchor="w")
+
+        def swatches(names):
+            items = []
+            for name in names:
+                fill, accent = swatch_colors(name)
+                items.append((name, theme_label(name), _rgb_hex(fill),
+                              _rgb_hex(accent)))
+            w = k.Swatches(ctrl, kit, items, lambda: st.theme_name,
+                           self._set_theme)
+            w.pack(anchor="w")
+            return w
+        # Two rows: the classic palettes, then the characters (their
+        # selection ring shows only in the row that holds the theme).
+        c["theme"] = swatches(CLASSIC_THEMES)
+        self._label(ctrl, "Characters", font=kit.f_small,
+                    fg=p["muted"]).pack(anchor="w", pady=(kit.px(6), kit.px(2)))
+        c["theme_characters"] = swatches(CHARACTER_THEMES)
         ctrl, _ = self._row(look, "Reduce motion",
                             "Calmer animations, no confetti")
         c["reduce_motion"] = k.Toggle(ctrl, kit, lambda: st.reduce_motion,

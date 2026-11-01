@@ -83,6 +83,45 @@ class TestDrawBuddyAcrossModes:
             drawing.draw_buddy(surface, 1.0, state, blink=False)
 
 
+# ── Character costumes ───────────────────────────────────────────────
+class TestCostumes:
+    def test_band_stays_inside_the_rounded_shell(self):
+        rect = (10, 20, 80, 60, 20)
+        poly = drawing._clipped_band(rect, 10, 30, 20, 80)
+        assert poly
+        for x, y in poly:
+            top, bottom = drawing._rrect_span(x, *rect)
+            assert top - 1e-6 <= y <= bottom + 1e-6
+
+    def test_band_outside_the_shell_is_skipped(self):
+        assert drawing._clipped_band((10, 20, 80, 60, 20), 0, 5, 0, 10) is None
+
+    @pytest.mark.parametrize("theme", ["batman", "pikachu", "hulk", "dory"])
+    def test_head_parts_draw_above_the_head(self, theme, clock):
+        # Ears, hair and fins stick out above the body; a classic theme
+        # leaves that strip empty.
+        def strip_pixels(name):
+            surf = pygame.Surface((drawing.WIN_W, drawing.WIN_H),
+                                  pygame.SRCALPHA)
+            st = buddy_state.BuddyState(theme_name=name, sound_pack="off",
+                                        clock=clock)
+            drawing.BuddyRenderer().draw(surf, 1000.0, st, blink=False)
+            top = int(drawing.BASE_TOP)
+            return sum(surf.get_at((x, y))[3] > 0
+                       for x in range(drawing.WIN_W)
+                       for y in range(top - 10, top - 1))
+        assert strip_pixels("dark") == 0
+        assert strip_pixels(theme) > 20
+
+    def test_costumes_draw_in_every_mode(self, surface, state):
+        for name in ("nemo", "ironman", "spiderman", "captain"):
+            state.set_theme(name)
+            for set_mode in (lambda s: None, lambda s: s.celebrate(),
+                             lambda s: s.wave(), lambda s: s.start_thinking()):
+                set_mode(state)
+                drawing.draw_buddy(surface, 1.0, state, blink=False)
+
+
 # ── Confetti lifecycle ───────────────────────────────────────────────
 class TestConfettiLifecycle:
     def test_celebrate_spawns_particles(self, state):

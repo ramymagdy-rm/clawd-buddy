@@ -244,7 +244,9 @@ permission, you know which window to switch to.
 
 ### Themes
 
-Clawd Buddy ships with **8 color themes** — a mix of dark and light with several popular palettes:
+Clawd Buddy ships with **16 themes**: 8 classic colour palettes and 8 characters.
+
+**Classic palettes**, a mix of dark and light:
 
 | # | Theme | Flavor |
 | --- | --- | --- |
@@ -257,17 +259,35 @@ Clawd Buddy ships with **8 color themes** — a mix of dark and light with sever
 | 7 | `solarized` | Muted solarized light |
 | 8 | `sunset` | Warm peach / orange light |
 
+**Characters**, which wear a costume on top of their colours:
+
+| # | Theme | Look |
+| --- | --- | --- |
+| 9 | `nemo` | Orange clownfish with white, black-edged stripes |
+| 10 | `dory` | Royal-blue tang with a black marking and yellow fins |
+| 11 | `batman` | Charcoal cowl with pointed ears and a yellow bat emblem |
+| 12 | `ironman` | Red armour, gold faceplate, glowing eyes and an arc reactor |
+| 13 | `hulk` | Green, with a black spiky fringe and purple shorts |
+| 14 | `spiderman` | Red mask with a black web and blue arms |
+| 15 | `captain` | Blue, red gloves and boots, a star shield on the forehead |
+| 16 | `pikachu` | Electric yellow, black-tipped ears and red cheeks |
+
+The character themes are fan-made tributes and aren't affiliated with or
+endorsed by the owners of those characters.
+
 Pick one at launch:
 
 ```bash
 clawd-buddy --theme dark        # default
 clawd-buddy --theme dracula
 clawd-buddy --theme sunset
+clawd-buddy --theme batman
 ```
 
 Switch at runtime from the **Theme** submenu on the system-tray icon
-(right-click the clawd-buddy tray icon → **Theme** → pick one). The active
-theme is marked as a radio item.
+(right-click the clawd-buddy tray icon → **Theme** → pick one; the
+characters are below the line), or from the colour dots on the settings
+window's **Buddy** page. The active theme is marked.
 
 Your choice is **remembered between launches**. The buddy stores the last
 theme in:
@@ -517,7 +537,7 @@ src/clawd_buddy/
 ├── placement.py    # dragging past the work-area edge (character offset)
 ├── webhook.py      # HTTP transport over the same dispatcher (--http-port)
 ├── ui/
-│   ├── themes.py   # 8 color theme registry
+│   ├── themes.py   # theme colours + character costumes
 │   ├── sound.py    # procedural PCM sound-pack generators
 │   ├── drawing.py  # BuddyRenderer: buddy, status pill, bubble, confetti
 │   ├── about.py    # settings & About window + shared buddy icon
@@ -668,7 +688,7 @@ The buddy adds a system tray icon with a right-click menu:
 - **Size** — S (1×), M (1.25×), L (1.5×), L+ (2×), XL (3×) or XXL (4×); same as Ctrl+1…6, remembered across restarts
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
 - **Center on Screen** — move the buddy to the middle of the screen (recovers a dragged-away or off-screen window)
-- **Theme** — pick one of the 8 themes (current one is checked)
+- **Theme** — pick one of the 16 themes: the 8 classic palettes, then the 8 characters (current one is checked)
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
   - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.
