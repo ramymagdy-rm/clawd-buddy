@@ -681,7 +681,7 @@ class ControlCenter:
         self._live(refresh)
 
         look = self._section(page, "Appearance")
-        ctrl, _ = self._row(look, "Size", "Ctrl+1 … Ctrl+6 on the buddy")
+        ctrl, _ = self._row(look, "Size", "Ctrl+1 … Ctrl+7 on the buddy")
         c = self.controls
         c["size"] = k.Segmented(
             ctrl, kit, [(n, st.SCALE_LABELS[n]) for n in st.SCALE_PRESETS],

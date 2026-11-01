@@ -514,9 +514,11 @@ class TestScalePref:
     def test_round_trip(self, isolated_config_dir):
         config.save_scale_pref(6)
         assert config.load_saved_scale_preset() == 6
+        config.save_scale_pref(7)
+        assert config.load_saved_scale_preset() == 7
 
     def test_garbage_falls_back(self, isolated_config_dir):
-        for bad in (0, 7, "6", 2.5, True, None):
+        for bad in (0, 8, "6", 2.5, True, None):
             config.save_config({"size": bad})
             assert config.load_saved_scale_preset() == 1
 

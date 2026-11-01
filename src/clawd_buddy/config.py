@@ -196,8 +196,8 @@ def save_volume_pref(v):
 
 
 # ── Size ─────────────────────────────────────────────────────────────
-# Preset numbers match BuddyState.SCALE_PRESETS (1 = S … 6 = XXL).
-SCALE_PRESET_NUMBERS = (1, 2, 3, 4, 5, 6)
+# Preset numbers match BuddyState.SCALE_PRESETS (1 = S … 7 = XXXL).
+SCALE_PRESET_NUMBERS = (1, 2, 3, 4, 5, 6, 7)
 
 
 def load_saved_scale_preset():
@@ -211,7 +211,7 @@ def load_saved_scale_preset():
 
 
 def save_scale_pref(preset):
-    """Persist the size preset (tray Size menu, Ctrl+1..6)."""
+    """Persist the size preset (tray Size menu, Ctrl+1..7)."""
     if isinstance(preset, bool) or preset not in SCALE_PRESET_NUMBERS:
         return
     cfg = load_config()

@@ -358,11 +358,15 @@ def _spawn_confetti(n):
 
 
 class BuddyState:
-    # Size presets: number (Ctrl+1..6, the tray Size menu, config) →
+    # Size presets: number (Ctrl+1..7, the tray Size menu, config) →
     # window scale. XXL's 800×1040 window is the largest that still fits
-    # a 1080p screen under a top bar.
-    SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0, 5: 3.0, 6: 4.0}
-    SCALE_LABELS = {1: "S", 2: "M", 3: "L", 4: "L+", 5: "XL", 6: "XXL"}
+    # a 1080p screen under a top bar. XXXL's 1000×1300 window doesn't:
+    # it hangs off the bottom of the screen, and the character slides
+    # up inside it to stay visible (see placement.visible_limits).
+    SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0, 5: 3.0, 6: 4.0,
+                     7: 5.0}
+    SCALE_LABELS = {1: "S", 2: "M", 3: "L", 4: "L+", 5: "XL", 6: "XXL",
+                    7: "XXXL"}
 
     def __init__(self, theme_name="dark", sound_pack=None, clock=None,
                  reduce_motion=False, volume=1.0,

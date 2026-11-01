@@ -39,7 +39,8 @@ Options:
 Controls:
   Drag             Click and drag to reposition
   Space            Test celebration
-  Ctrl+1..6        Size: S 1x / M 1.25x / L 1.5x / L+ 2x / XL 3x / XXL 4x
+  Ctrl+1..7        Size: S 1x / M 1.25x / L 1.5x / L+ 2x / XL 3x / XXL 4x /
+                   XXXL 5x
   Escape           Quit
 
 Switch themes from the system-tray right-click menu (Theme submenu)
@@ -213,11 +214,11 @@ def _run_buddy(args, port):
         window_has_alpha,
     )
     from . import history
-    from .placement import DragPlacement
+    from .placement import DragPlacement, area_at, visible_limits
     from .state import BuddyState
     from .ui.about import make_buddy_icon_surface, show_about_dialog
     from .ui.drawing import (
-        GROUND_Y, OFFSET_LIMITS, BuddyRenderer, compose_frame,
+        GROUND_Y, HIT_BOX, OFFSET_LIMITS, BuddyRenderer, compose_frame,
         frame_size_for)
     from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
     from .ui.tray import create_tray
@@ -408,6 +409,36 @@ def _run_buddy(args, port):
         sc = state.scale
         return tuple(v * sc for v in OFFSET_LIMITS)
 
+    def visible_box_px():
+        """The character plus its ground shadow, in window pixels: what
+        must stay on screen when the window is bigger than it."""
+        sc = state.scale
+        x, y, w, h = HIT_BOX
+        return (x * sc, y * sc, w * sc, (h + 4) * sc)
+
+    def limits_at(wx, wy):
+        """Offset limits for the window at (wx, wy), kept to the visible
+        part of the window when it's bigger than the monitor (XXXL)."""
+        areas = work_areas or get_work_areas()
+        if not areas:
+            return offset_limits_px()
+        w, h = screen.get_size()
+        bx, by, bw, bh = visible_box_px()
+        ox, oy = placement.offset
+        here = (wx + bx + ox + bw / 2, wy + by + oy + bh / 2)
+        return visible_limits(offset_limits_px(), (wx, wy, w, h),
+                              (bx, by, bw, bh), area_at(areas, here))
+
+    def settle(desired):
+        """Aim the character at where it would be with its window at
+        `desired`, wherever the window manager actually put the window,
+        and check again once it has settled."""
+        nonlocal reconcile_at
+        wx, wy, _, _ = get_window_rect(handle)
+        placement.aim(desired, (wx, wy), limits_at(wx, wy))
+        sync_offset()
+        reconcile_at = t + 0.3
+
     def sync_offset():
         sc = state.scale
         ox, oy = placement.offset
@@ -461,11 +492,18 @@ def _run_buddy(args, port):
             # Grow or shrink around the buddy's feet, so it stays put.
             ox, oy = renderer.offset
             feet = ((WIN_W / 2 + ox) / WIN_W, (GROUND_Y + oy) / WIN_H)
+            wx, wy, ow, oh = get_window_rect(handle)
+            fx, fy = wx + ow * feet[0], wy + oh * feet[1]
             screen, handle = resize_window(handle, state.scale, topmost,
                                            anchor=feet)
             frame = None
-            placement.reset()
-            sync_offset()
+            # Where the window would be with the feet in place and no
+            # offset. A window bigger than the monitor (XXXL) gets
+            # pinned to the top of the work area instead; the character
+            # then slides up inside it to stay on screen.
+            sc = state.scale
+            work_areas = get_work_areas()
+            settle((fx - WIN_W / 2 * sc, fy - GROUND_Y * sc))
             # The window manager may work out the clickable region
             # against the old size; set it again once the resize lands.
             region_recheck_at = t + 0.3
@@ -488,7 +526,9 @@ def _run_buddy(args, port):
             state._center_requested = False
             center_window(handle)
             placement.reset()
-            sync_offset()
+            work_areas = get_work_areas()
+            wx, wy, _, _ = get_window_rect(handle)
+            settle((wx, wy))
 
         # Shortly after a drag ends, check where the window manager
         # actually put the window and re-aim the character at the spot
@@ -497,7 +537,7 @@ def _run_buddy(args, port):
         if reconcile_at is not None and t >= reconcile_at:
             reconcile_at = None
             wx, wy, _, _ = get_window_rect(handle)
-            if placement.reconcile((wx, wy), offset_limits_px()):
+            if placement.reconcile((wx, wy), limits_at(wx, wy)):
                 sync_offset()
 
         # M3: tray's Volume submenu mutates state.volume on the tray
@@ -573,8 +613,8 @@ def _run_buddy(args, port):
                         state.drink_acknowledged()
                     else:
                         state.celebrate()
-                elif pygame.K_1 <= ev.key <= pygame.K_6:
-                    # Ctrl+1..6 picks a size (S … XXL), like the tray
+                elif pygame.K_1 <= ev.key <= pygame.K_7:
+                    # Ctrl+1..7 picks a size (S … XXXL), like the tray
                     # Size menu. Theme switching is via the tray only.
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_CTRL:
@@ -598,7 +638,7 @@ def _run_buddy(args, port):
             elif ev.type == pygame.MOUSEMOTION and placement.dragging:
                 tx, ty = placement.update(
                     pointer_pos(ev.pos), screen.get_size(), work_areas,
-                    offset_limits_px())
+                    offset_limits_px(), box=visible_box_px())
                 move_window(handle, tx, ty)
                 sync_offset()
 
