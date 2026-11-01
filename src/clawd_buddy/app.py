@@ -47,63 +47,24 @@ or with the --theme CLI flag at launch.
 
 import json
 import os
-import socket
 import sys
-import threading
-import time
 
-from .cli import parse_args, read_hook_stdin, workspace_label_from_cwd
-from .config import (
-    load_saved_quiet_hours,
-    load_saved_reduce_motion,
-    load_saved_reminder_anchor_minute,
-    load_saved_reminder_enabled,
-    load_saved_reminder_interval,
-    load_saved_reminder_quiet_hours,
-    load_saved_reminder_sound,
-    load_saved_sound_pack,
-    load_saved_theme,
-    load_saved_volume,
-    load_saved_workspace_badge,
-    save_theme_pref,
-)
-from .constants import FPS, SOCK_PORT, WIN_H, WIN_W
-from .ipc import request_status, send_signal, socket_listener
-from .webhook import webhook_listener
-from .platform import (
-    auto_detach,
-    center_window,
-    disable_startup,
-    enable_startup,
-    get_bg_fill,
-    get_initial_position,
-    get_window_handle,
-    get_window_rect,
-    move_window,
-    prepare_window_transparency,
-    raise_window,
-    resize_window,
-    set_dpi_awareness,
-    setup_window,
-    window_has_alpha,
-)
-from . import history
-from .state import BuddyState
-from .ui.about import make_buddy_icon_surface
-from .ui.drawing import compose_frame, draw_buddy
-from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
-from .ui.tray import create_tray
-
+# Before anything can import pygame: keep its "Hello from the pygame
+# community" banner out of hook output (Claude Code shows hook stdout).
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 # Force X11 on Linux — Wayland restricts window positioning & always-on-top
 if sys.platform == "linux":
     os.environ.setdefault("SDL_VIDEODRIVER", "x11")
 
-import pygame
-
-
-
+# Only light modules at import time. Hooks run `clawd-buddy --send` /
+# `--wave` / `--prompt-start` on every prompt, and those one-shot
+# signals must not pay for pygame, Pillow, pystray or http.server —
+# the GUI-only imports live in `_run_buddy`.
+from .cli import parse_args, read_hook_stdin, workspace_label_from_cwd
+from .config import load_saved_theme, save_theme_pref
+from .constants import SOCK_PORT
+from .ipc import request_status, send_signal
 
 
 # ── Main ──────────────────────────────────────────────────────────────
@@ -124,9 +85,11 @@ def main():
 
     # --startup / --no-startup
     if args.startup:
+        from .platform import enable_startup
         enable_startup()
         sys.exit(0)
     if args.no_startup:
+        from .platform import disable_startup
         disable_startup()
         sys.exit(0)
 
@@ -201,6 +164,60 @@ def main():
             print(f"[buddy] No buddy on port {port}")
             sys.exit(1)
         sys.exit(0)
+
+    _run_buddy(args, port)
+
+
+def _run_buddy(args, port):
+    """Start the GUI buddy: detach, take the single-instance lock, open
+    the window and run the render loop. Everything heavy is imported
+    here so the one-shot signal path in `main` stays fast."""
+    import socket
+    import threading
+    import time
+
+    from .config import (
+        load_saved_quiet_hours,
+        load_saved_reduce_motion,
+        load_saved_reminder_anchor_minute,
+        load_saved_reminder_enabled,
+        load_saved_reminder_interval,
+        load_saved_reminder_quiet_hours,
+        load_saved_reminder_sound,
+        load_saved_sound_pack,
+        load_saved_volume,
+        load_saved_workspace_badge,
+    )
+    from .constants import FPS_ACTIVE, FPS_IDLE, WIN_H, WIN_W
+    from .ipc import socket_listener
+    from .webhook import webhook_listener
+    from .platform import (
+        auto_detach,
+        center_window,
+        get_bg_fill,
+        get_initial_position,
+        get_window_handle,
+        get_window_rect,
+        get_work_areas,
+        move_window,
+        prepare_window_transparency,
+        raise_window,
+        resize_window,
+        set_dpi_awareness,
+        set_input_region,
+        setup_window,
+        window_has_alpha,
+    )
+    from . import history
+    from .placement import DragPlacement
+    from .state import BuddyState
+    from .ui.about import make_buddy_icon_surface
+    from .ui.drawing import (
+        OFFSET_LIMITS, BuddyRenderer, compose_frame, frame_size_for)
+    from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
+    from .ui.tray import create_tray
+
+    import pygame
 
     # Auto-detach: run in background
     if not args.fg:
@@ -335,13 +352,12 @@ def main():
     if args.test:
         state.trigger()
 
-    # Base surface — always draw at native resolution, then scale to window.
-    # It carries per-pixel alpha only when the window does (Linux ARGB);
-    # otherwise the background is an opaque colour (Windows colour-key
-    # or the theme's bg_fill).
+    # The window has per-pixel alpha on Linux with a compositor; there
+    # the frame is supersampled and filtered down for smooth edges.
+    # Otherwise (Windows colour-key, bare X11) it's an opaque frame at
+    # window size with hard edges. See ui/drawing.py.
     transparent = window_has_alpha(screen)
-    base_surf = pygame.Surface(
-        (WIN_W, WIN_H), pygame.SRCALPHA if transparent else 0)
+    renderer = BuddyRenderer()
 
     # Background threads
     threading.Thread(target=socket_listener, args=(state, port),
@@ -361,18 +377,68 @@ def main():
             daemon=True,
         ).start()
 
-    # Drag state
-    dragging = False
-    drag_off = (0, 0)
+    # Drag state. The window can only go as far as the window manager
+    # allows (mutter keeps it inside the monitor's work area); past that
+    # the character slides inside its own window, so it can still reach
+    # the top and sides of the screen. See placement.py.
+    placement = DragPlacement()
+    work_areas = []
+    reconcile_at = None
+
+    def pointer_pos(ev_pos):
+        """Pointer position on the desktop. Falls back to window origin
+        + event position on pygame builds without `desktop=`."""
+        try:
+            return pygame.mouse.get_pos(desktop=True)
+        except TypeError:
+            wx, wy, _, _ = get_window_rect(handle)
+            return wx + ev_pos[0], wy + ev_pos[1]
+
+    def offset_limits_px():
+        sc = state.scale
+        return tuple(v * sc for v in OFFSET_LIMITS)
+
+    def sync_offset():
+        sc = state.scale
+        ox, oy = placement.offset
+        renderer.offset = (ox / sc, oy / sc)
+
+    # Only the character itself takes mouse input; clicks on the
+    # transparent rest of the window reach whatever is behind it.
+    applied_region = None
+
+    def update_input_region():
+        nonlocal applied_region
+        sc = state.scale
+        x, y, w, h = renderer.hit_rect()
+        region = (handle, int(x * sc), int(y * sc),
+                  int(round(w * sc)), int(round(h * sc)))
+        if region != applied_region:
+            set_input_region(handle, [region[1:]])
+            applied_region = region
 
     # Blink
     blink_timer = 0.0
     blink_interval = 3.5
     blink_dur = 0.12
 
+    # Frame bookkeeping for partial updates: the frame surface (rebuilt
+    # on resize), the region of it painted last frame (cleared before
+    # the next draw), the screen region shown last frame (folded into
+    # the next display update so the old pose gets erased) and the
+    # background colour the frame was filled with.
+    frame = None
+    frame_dirty = None
+    shown = None
+    frame_bg = None
+
     running = True
     while running:
-        dt = clock.tick(FPS) / 1000.0
+        # 60 FPS while something is moving fast (reactions, confetti,
+        # an easing transition, a drag); 30 FPS for the ambient idle and
+        # thinking loops, which keeps the idle CPU cost low.
+        fast = placement.dragging or renderer.wants_fast_frames(state)
+        dt = clock.tick(FPS_ACTIVE if fast else FPS_IDLE) / 1000.0
         t = time.time()
 
         if state.should_quit:
@@ -382,6 +448,9 @@ def main():
         if state._scale_changed:
             state._scale_changed = False
             screen, handle = resize_window(handle, state.scale, topmost)
+            frame = None
+            placement.reset()
+            sync_offset()
 
         # Apply pending bring-to-front request
         if state._raise_requested:
@@ -395,6 +464,18 @@ def main():
         if state._center_requested:
             state._center_requested = False
             center_window(handle)
+            placement.reset()
+            sync_offset()
+
+        # Shortly after a drag ends, check where the window manager
+        # actually put the window and re-aim the character at the spot
+        # the drag asked for, in case it clamped differently than the
+        # published work areas predicted.
+        if reconcile_at is not None and t >= reconcile_at:
+            reconcile_at = None
+            wx, wy, _, _ = get_window_rect(handle)
+            if placement.reconcile((wx, wy), offset_limits_px()):
+                sync_offset()
 
         # M3: tray's Volume submenu mutates state.volume on the tray
         # thread and flips _volume_changed; the main loop re-applies
@@ -449,6 +530,10 @@ def main():
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 running = False
+            elif ev.type in (pygame.WINDOWEXPOSED, pygame.VIDEOEXPOSE):
+                # Without a compositor X11 forgets uncovered pixels, so
+                # repaint the whole window, not just the dirty region.
+                shown = None
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_ESCAPE:
                     running = False
@@ -469,15 +554,22 @@ def main():
                     if mods & pygame.KMOD_CTRL:
                         state.set_scale(ev.key - pygame.K_0)
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                dragging = True
-                drag_off = ev.pos
-            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
-                dragging = False
-            elif ev.type == pygame.MOUSEMOTION and dragging:
-                mx, my = ev.pos
+                # Work areas change rarely (monitors, docks); one read
+                # per drag is plenty.
+                work_areas = get_work_areas()
                 wx, wy, _, _ = get_window_rect(handle)
-                move_window(handle, wx + mx - drag_off[0],
-                            wy + my - drag_off[1])
+                placement.begin(pointer_pos(ev.pos), (wx, wy))
+                reconcile_at = None
+            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                if placement.dragging:
+                    placement.end()
+                    reconcile_at = t + 0.25
+            elif ev.type == pygame.MOUSEMOTION and placement.dragging:
+                tx, ty = placement.update(
+                    pointer_pos(ev.pos), screen.get_size(), work_areas,
+                    offset_limits_px())
+                move_window(handle, tx, ty)
+                sync_offset()
 
         state.update()
 
@@ -486,11 +578,25 @@ def main():
         phase = blink_timer % blink_interval
         is_blink = phase > blink_interval - blink_dur
 
-        # Draw at base resolution, then scale up
-        base_surf.fill(get_bg_fill(state.theme_name, transparent))
-        draw_buddy(base_surf, t, state, is_blink)
-        compose_frame(screen, base_surf, transparent)
-        pygame.display.flip()
+        bg = get_bg_fill(state.theme_name, transparent)
+        if frame is None or bg != frame_bg:
+            frame = pygame.Surface(
+                frame_size_for(screen.get_size(), transparent),
+                pygame.SRCALPHA if transparent else 0)
+            frame.fill(bg)
+            frame_bg = bg
+            shown = None
+        elif frame_dirty is not None:
+            frame.fill(bg, frame_dirty)
+        update_input_region()
+        renderer.draw(frame, t, state, is_blink)
+        frame_dirty = renderer.dirty
+        content = compose_frame(screen, frame, transparent, frame_dirty)
+        if shown is None:
+            pygame.display.flip()
+        else:
+            pygame.display.update(content.union(shown))
+        shown = content
 
     pygame.quit()
     lock_sock.close()

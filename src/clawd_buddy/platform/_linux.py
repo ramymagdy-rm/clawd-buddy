@@ -24,6 +24,7 @@ from ..constants import WIN_H, WIN_W
 
 _x11 = None
 _x11_display = None
+_xext = None  # libXext (SHAPE extension); False when unavailable
 
 class _XClientMessageData(ctypes.Union):
     _fields_ = [
@@ -138,6 +139,18 @@ def _linux_init_x11():
         _x11.XGetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
         _x11.XGetSelectionOwner.restype = ctypes.c_ulong
 
+        _x11.XGetWindowProperty.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+            ctypes.c_long, ctypes.c_long, ctypes.c_int, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        _x11.XGetWindowProperty.restype = ctypes.c_int
+
+        _x11.XFree.argtypes = [ctypes.c_void_p]
+        _x11.XFree.restype = ctypes.c_int
+
         _x11_display = _x11.XOpenDisplay(None)
         if not _x11_display:
             _x11 = None
@@ -149,6 +162,104 @@ def _linux_init_x11():
 
 def _linux_get_window_id():
     return pygame.display.get_wm_info().get("window", 0)
+
+def _linux_root_cardinals(name):
+    """Read a CARDINAL[] property off the root window as a list of ints,
+    or None when it isn't set."""
+    if not _linux_init_x11():
+        return None
+    atom = _x11.XInternAtom(_x11_display, name.encode(), 1)
+    if not atom:
+        return None
+    root = _x11.XDefaultRootWindow(_x11_display)
+    act_type = ctypes.c_ulong()
+    act_format = ctypes.c_int()
+    n_items = ctypes.c_ulong()
+    after = ctypes.c_ulong()
+    data = ctypes.c_void_p()
+    XA_CARDINAL = 6
+    status = _x11.XGetWindowProperty(
+        _x11_display, root, atom, 0, 1024, 0, XA_CARDINAL,
+        ctypes.byref(act_type), ctypes.byref(act_format),
+        ctypes.byref(n_items), ctypes.byref(after), ctypes.byref(data))
+    if status != 0 or not data.value:
+        return None
+    try:
+        if act_format.value != 32:
+            return None
+        # Format-32 properties come back as C longs, whatever their size.
+        arr = ctypes.cast(data, ctypes.POINTER(ctypes.c_long))
+        return [int(arr[i]) for i in range(n_items.value)]
+    finally:
+        _x11.XFree(data)
+
+def _linux_get_work_areas():
+    """Usable screen rectangles (x, y, w, h), one per monitor when the
+    window manager says so.
+
+    Mutter keeps client-moved windows fully inside a monitor's work area
+    (below the top bar, right of the dock). It publishes those per-monitor
+    areas in `_GTK_WORKAREAS_D<desktop>`; other window managers only set
+    the single `_NET_WORKAREA` rectangle, used as a fallback. Returns []
+    when neither is available.
+    """
+    desktop = _linux_root_cardinals("_NET_CURRENT_DESKTOP")
+    d = desktop[0] if desktop else 0
+    for name, index in ((f"_GTK_WORKAREAS_D{d}", None),
+                        ("_NET_WORKAREA", d)):
+        vals = _linux_root_cardinals(name)
+        if not vals or len(vals) % 4:
+            continue
+        rects = [tuple(vals[i:i + 4]) for i in range(0, len(vals), 4)]
+        if index is not None:
+            rects = [rects[index]] if index < len(rects) else rects[:1]
+        rects = [r for r in rects if r[2] > 0 and r[3] > 0]
+        if rects:
+            return rects
+    return []
+
+class _XRectangle(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short),
+                ("width", ctypes.c_ushort), ("height", ctypes.c_ushort)]
+
+def _linux_init_xext():
+    global _xext
+    if _xext is None:
+        try:
+            lib = ctypes.cdll.LoadLibrary("libXext.so.6")
+            lib.XShapeCombineRectangles.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.POINTER(_XRectangle),
+                ctypes.c_int, ctypes.c_int, ctypes.c_int]
+            lib.XShapeCombineRectangles.restype = None
+            lib.XShapeQueryExtension.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_int)]
+            lib.XShapeQueryExtension.restype = ctypes.c_int
+            ev, err = ctypes.c_int(), ctypes.c_int()
+            ok = (_linux_init_x11() and lib.XShapeQueryExtension(
+                _x11_display, ctypes.byref(ev), ctypes.byref(err)))
+            _xext = lib if ok else False
+        except (OSError, AttributeError):
+            _xext = False
+    return _xext or None
+
+def _linux_set_input_region(window_id, rects):
+    """Limit where the window accepts mouse input to `rects` (window
+    pixels, (x, y, w, h)). Clicks anywhere else go to whatever is behind
+    the buddy instead of being swallowed by its transparent window.
+    Returns True when the region was applied."""
+    lib = _linux_init_xext()
+    if lib is None or not window_id:
+        return False
+    arr = (_XRectangle * len(rects))(*[
+        _XRectangle(int(x), int(y), max(0, int(w)), max(0, int(h)))
+        for x, y, w, h in rects])
+    SHAPE_INPUT, SHAPE_SET, UNSORTED = 2, 0, 0
+    lib.XShapeCombineRectangles(_x11_display, window_id, SHAPE_INPUT, 0, 0,
+                                arr, len(rects), SHAPE_SET, UNSORTED)
+    _x11.XFlush(_x11_display)
+    return True
 
 def _linux_compositor_running():
     """True when a compositing manager owns the _NET_WM_CM_Sn selection.

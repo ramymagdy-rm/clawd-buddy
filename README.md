@@ -11,11 +11,16 @@ Clawd Buddy is a small always-on-top character that lives on your taskbar while 
 
 | State | What happens |
 | --- | --- |
-| **Idle** | Gently bobs, blinks, breathes — your quiet companion |
-| **New session begins** (`UserPromptSubmit` hook, first prompt) | Greets with a soft wave, a smaller smile, and a pulsing **cyan** border |
-| **Assistant is thinking** (between `UserPromptSubmit` and `Stop`) | Pupils sweep upward, three pulsing dots float above the head, gentle **purple** border |
-| **Assistant finishes** (`Stop` hook) | Celebrates with confetti, happy eyes, waving arms, a short motivational fanfare, and a pulsing **green** border |
-| **Assistant needs permission** (`PermissionRequest` hook) | Waves with a floating **!**, a warm two-note doorbell call, and a pulsing **yellow** border |
+| **Idle** | Breathes, blinks and glances around now and then — your quiet companion |
+| **New session begins** (`UserPromptSubmit` hook, first prompt) | Hops and waves hello with happy eyes; a **cyan** "New session" pill floats above its head |
+| **Assistant is thinking** (between `UserPromptSubmit` and `Stop`) | Hovers and taps away with a focused look; a **purple** "Thinking…" pill with a spinner |
+| **Assistant finishes** (`Stop` hook) | Hops with squash and stretch, arms up, confetti, a short motivational fanfare, and a **green** "Done" pill |
+| **Assistant needs permission** (`PermissionRequest` hook) | Bounces and waves with wide eyes, a warm two-note doorbell call, and a **yellow** "Needs input" pill |
+
+The status pill is the buddy's at-a-glance readout, so you can tell what
+the assistant is doing without switching windows. With a compositor (Linux)
+the buddy also gets a soft ground shadow, a coloured glow while it reacts,
+and antialiased edges.
 
 > If multiple signals arrive in quick succession (e.g. a `PermissionRequest`
 > while a celebrate is still animating), the buddy now **queues** them
@@ -45,7 +50,7 @@ envelopes). Your choice persists across launches in `config.json` under
 Toggle from the system-tray right-click menu → **Sound**. The choice is
 remembered between launches (saved alongside the theme in `config.json`).
 If your machine has no audio device, the buddy logs a one-line warning and
-runs silently while the visual border still works.
+runs silently while the status pill still shows what's happening.
 
 ### Comfort & accessibility
 
@@ -53,10 +58,11 @@ Three preferences keep the buddy polite across motion sensitivities,
 audio environments, and quiet hours:
 
 - **Reduce motion** (system-tray → **Reduce Motion** toggle).
-  When on, the buddy stops bobbing, swinging limbs, and spawning
-  confetti. The pulsing colored border and notification sounds remain
-  — the signaling minimum — so you can still tell when Claude is
-  greeting, thinking, waving, or celebrating.
+  When on, the buddy stops hopping, bobbing, swinging limbs, and
+  spawning confetti, and holds a still pose for each state. The status
+  pill and notification sounds remain — the signaling minimum — so you
+  can still tell when Claude is greeting, thinking, waving, or
+  celebrating.
 - **Volume** (system-tray → **Sound** → **Volume**).
   Discrete steps from **0% to 100%** scale the active pack's per-event
   base levels (celebrate is intentionally louder than wave). Clicking a
@@ -193,9 +199,9 @@ Security posture:
 ### Workspace badge — who just signaled?
 
 Running several Claude Code sessions across workspaces, all driving
-the same buddy? A small one-letter badge above the buddy's left
-shoulder shows **which workspace last signaled** — so when a wave
-asks for permission, you know which window to switch to.
+the same buddy? A small one-letter badge at the front of the status
+pill shows **which workspace last signaled** — so when a wave asks for
+permission, you know which window to switch to.
 
 - The label comes from the Claude Code hook payload's `cwd`
   automatically (`C:\dev\api` → badge **A**); scripts can override
@@ -429,7 +435,7 @@ clawd-buddy --help           Show help
 
 | Input | Action |
 | --- | --- |
-| **Drag** | Click anywhere on the buddy and drag to reposition |
+| **Drag** | Click the buddy itself and drag to reposition. It reaches the very top and sides of the screen: where the window manager stops its window, the buddy keeps sliding inside it. Clicks around the buddy go through to whatever is behind it |
 | **Space** | Trigger a test celebration |
 | **Ctrl+1** | Scale to 100% (default) |
 | **Ctrl+2** | Scale to 125% |
@@ -469,11 +475,12 @@ src/clawd_buddy/
 ├── config.py       # ~/.config/clawd-buddy persistence
 ├── history.py      # ~/.clawd-buddy/history.json drinking-history store
 ├── ipc.py          # JSON-over-TCP protocol + dispatcher + client
+├── placement.py    # dragging past the work-area edge (character offset)
 ├── webhook.py      # HTTP transport over the same dispatcher (--http-port)
 ├── ui/
 │   ├── themes.py   # 8 color theme registry
 │   ├── sound.py    # procedural PCM sound-pack generators
-│   ├── drawing.py  # pygame draw routines (buddy + confetti)
+│   ├── drawing.py  # BuddyRenderer: buddy, status pill, bubble, confetti
 │   ├── about.py    # About dialog + shared buddy icon
 │   ├── tray.py     # pystray icon + right-click menu
 │   └── sni.py      # Linux tray backend: StatusNotifierItem + DBusMenu over D-Bus
@@ -614,7 +621,7 @@ The buddy adds a system tray icon with a right-click menu:
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
   - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.
-- **Reduce Motion** — accessibility toggle. When checked, the buddy stops bobbing, swinging limbs, and spawning confetti; the colored attention border and sounds remain.
+- **Reduce Motion** — accessibility toggle. When checked, the buddy stops hopping, bobbing, swinging limbs, and spawning confetti; the status pill and sounds remain.
 - **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, quiet hours) lives in **About… → Reminders**.
 - **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss the current alarm. The next scheduled slot still fires on time.
 - **Stop Pomodoro** — *appears only while a pomodoro cycle is running*. Ends the cycle (same as `clawd-buddy --pomodoro-stop`).
@@ -638,54 +645,52 @@ Support** extension (Ubuntu ships it enabled).
 
 ## Animations
 
+The buddy is a little terminal with a face on its screen: glowing pill
+eyes, blush, nub arms and feet. Switching between states crossfades the
+pose over about 0.2 s instead of snapping, and a status pill slides in
+above its head.
+
 ### Idle
 
-- Gentle vertical bobbing (sine wave)
-- Periodic blinking (every ~5 seconds)
-- Pupils wander slowly
-- Small mouth line with subtle movement
-- Arms sway gently at sides
+- Slow breathing (a slight squash and stretch)
+- Blinks every few seconds
+- Glances left and right now and then
+- Small smile, arms relaxed at its sides
+- No status pill (unless the workspace badge is showing)
 
 ### Celebrate (on `Stop`)
 
-- Fast bouncing
-- Happy arc eyes (^ ^)
-- Wide smile
-- Both arms waving up
-- Legs kicking
+- Three quick hops with squash on take-off and landing, then a happy sway
+- Happy arc eyes (^ ^), open smile, stronger blush
+- Both arms up, wiggling
 - Confetti burst (40 particles with gravity and drag)
-- Pulsing **green** border around the body
+- **Green** "Done" pill with a check mark, plus a green glow
 - Motivational C-major arpeggio + triad chord (if Sound is enabled)
-- Duration: 3.5 seconds
+- Duration: 5 seconds
 
 ### Wave (on `PermissionRequest`)
 
-- Medium bobbing
-- Wide alert eyes (large pupils, staring)
-- Surprised "o" mouth
-- Right arm waving high
-- Pulsing floating **!** indicator above head
-- Pulsing **yellow** border around the body
+- Small repeated bounce
+- Wide alert eyes and a surprised "o" mouth
+- Right arm raised and waving fast
+- **Yellow** "Needs input" pill with a pulsing **!**, plus a yellow glow
 - Warm two-note doorbell call (if Sound is enabled)
 - Duration: 5 seconds
 
 ### Greet (first prompt of a new session)
 
-- Medium bobbing
-- Small happy arc eyes
-- Smaller smile
-- Right arm raised in a friendly hello
-- Pulsing **cyan** border around the body
+- One hop, then a friendly wave
+- Happy arc eyes and a smile
+- **Cyan** "New session" pill, plus a soft cyan glow
 - Silent (audio is intentionally deferred to a later milestone)
 - Duration: ~1.8 seconds
 - Per-session de-duplication via Claude Code's `session_id`
 
 ### Thinking (between `UserPromptSubmit` and `Stop`)
 
-- Slow, calm bobbing
-- Pupils sweep upward and side-to-side (a "considering" pose)
-- Three small pulsing dots float above the head
-- Soft **purple** border, gentler pulse than the other states
+- Gentle hover while both arms tap away, like typing
+- Narrowed eyes looking up and to the side (a "considering" pose)
+- **Purple** "Thinking…" pill with a spinner
 - Silent
 - Holds indefinitely until `Stop` arrives (with a 10-minute safety cap
   in case the assistant crashes or the network drops)
@@ -696,9 +701,9 @@ Support** extension (Ubuntu ships it enabled).
 ### Speech bubble (any tool, via `--message`)
 
 - Triggered by `clawd-buddy --message "TEXT"`
-- Rounded bubble above the buddy's head with a small downward tail
-- Theme-coloured (uses the active theme's screen background + body
-  border + text colour)
+- Rounded bubble above the buddy's head (above the status pill, when
+  one is showing) with a small downward tail
+- Matches the status pill: dark on dark themes, white on light ones
 - Word-wrapped to **at most two lines**, anything longer is truncated
   with an ellipsis
 - Auto-dismisses after **3 seconds**; sending a new message replaces
