@@ -658,3 +658,42 @@ class TestNewCostumeParts:
         pts = drawing._shrink([(0, 0), (4, 0), (4, 4), (0, 4)], 0.5)
         assert pts == [(1, 1), (3, 1), (3, 3), (1, 3)]
 
+
+class TestNoFlickerWhileBreathing:
+    """Shapes sampled right up to the shell's edge used to lose their
+    last column on some frames (a rounding error put it just outside),
+    so the right side of a princess's hair flickered as she breathed."""
+
+    def test_a_rounding_error_past_the_edge_is_still_on_it(self):
+        rect = (10.0, 20.0, 80.3, 60.0, 20.0)
+        x = rect[0] + rect[2] * 28 / 28 + 1e-12
+        assert drawing._rrect_span(x, *rect) is not None
+        assert drawing._rrect_span(rect[0] + rect[2] + 1, *rect) is None
+
+    @pytest.mark.parametrize("theme", ["ariel", "rapunzel", "buzz"])
+    def test_left_and_right_change_alike(self, theme, clock):
+        from clawd_buddy.ui.themes import costume
+        color = costume(theme).get("hair") or costume(theme)["bands"][1][4]
+        t = [1000.0]
+        st = buddy_state.BuddyState(theme_name=theme, sound_pack="off",
+                                    clock=lambda: t[0])
+        r = drawing.BuddyRenderer()
+        half = pygame.mask.Mask((WIN_W, WIN_H * 2), fill=True)
+        prev, left, right = None, 0, 0
+        for i in range(90):
+            t[0] = 1000 + i / 60
+            surf = pygame.Surface((WIN_W * 2, WIN_H * 2), pygame.SRCALPHA)
+            surf.fill((0, 0, 0, 0))
+            r.draw(surf, t[0], st, blink=False)
+            m = pygame.mask.from_threshold(surf, color + (255,),
+                                           (1, 1, 1, 255))
+            if prev is not None:
+                both = m.overlap_mask(prev, (0, 0))
+                a, b = m.copy(), prev.copy()
+                a.erase(both, (0, 0))
+                b.erase(both, (0, 0))
+                a.draw(b, (0, 0))
+                lc = a.overlap_area(half, (0, 0))
+                left, right = left + lc, right + a.count() - lc
+            prev = m
+        assert right < left * 1.3 + 50, (left, right)
