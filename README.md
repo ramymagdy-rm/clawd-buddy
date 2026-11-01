@@ -47,7 +47,7 @@ controls everything:
 | **About** | Version, source link, the settings folder, keyboard shortcuts |
 
 Every change applies to the buddy at once and is saved; there is no
-Save button. Changes made elsewhere (the tray menu, Ctrl+1…6) show up
+Save button. Changes made elsewhere (the tray menu, Ctrl+1…7) show up
 in the window while it's open. It follows your desktop's light or dark
 preference. `clawd-buddy --settings focus` opens it on a given page,
 and the sidebar's **Quit Clawd Buddy** button asks for a second click
@@ -306,7 +306,7 @@ theme, so the override sticks for next time too. First-run default is `dark`.
 | **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | Notification-area icon (pystray) | VBS in Startup folder |
 | **Linux (X11 / XWayland)** | Per-pixel alpha with a compositor (fully transparent background); themed background without one | `_NET_WM_STATE_ABOVE` | StatusNotifierItem over D-Bus (GNOME needs the AppIndicator extension, which Ubuntu enables by default) | `.desktop` in `~/.config/autostart/` |
 
-> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use the tray **Size** menu (or `Ctrl+2`…`Ctrl+6`) to enlarge it if you'd like it bigger.
+> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use the tray **Size** menu (or `Ctrl+2`…`Ctrl+7`) to enlarge it if you'd like it bigger.
 
 > **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px. When a compositing manager is running (GNOME, KDE, Xfce with compositing, picom…), the window uses a 32-bit ARGB visual, so the background is truly transparent. This sets `SDL_VIDEO_X11_WINDOW_VISUALID` and `SDL_FRAMEBUFFER_ACCELERATION=0` automatically.
 
@@ -496,6 +496,7 @@ clawd-buddy --help           Show help
 | **Ctrl+4** | Size L+, 2× |
 | **Ctrl+5** | Size XL, 3× |
 | **Ctrl+6** | Size XXL, 4× |
+| **Ctrl+7** | Size XXXL, 5×. Its window is taller than a 1080p screen, so it hangs off the bottom and the buddy slides up inside it to stay in view |
 
 The same sizes are in the tray **Size** menu. The size you pick is
 remembered, and the buddy keeps its feet where they were when it grows

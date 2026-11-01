@@ -62,6 +62,33 @@ def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
+def visible_limits(limits, win_rect, box, area):
+    """Tighten offset `limits` so the character stays on screen when
+    its window is bigger than the work area `area` (XXXL on a 1080p
+    monitor). On such an axis the window manager pins the window to the
+    area's edge and the rest hangs off screen, so the character may
+    only slide within the part of the window that's visible. `box` is
+    the character's box inside the window at offset 0 (screen pixels).
+    Axes where the window fits are left alone, so a normal window can
+    still straddle two monitors."""
+    x0, x1, y0, y1 = limits
+    wx, wy, ww, wh = win_rect
+    bx, by, bw, bh = box
+    ax, ay, aw, ah = area
+    if ww >= aw:
+        x0, x1 = _tighten(x0, x1, ax - wx - bx, ax + aw - wx - bx - bw)
+    if wh >= ah:
+        y0, y1 = _tighten(y0, y1, ay - wy - by, ay + ah - wy - by - bh)
+    return x0, x1, y0, y1
+
+
+def _tighten(lo, hi, new_lo, new_hi):
+    lo, hi = max(lo, new_lo), min(hi, new_hi)
+    if lo > hi:            # can't fit at all: centre it on what's left
+        lo = hi = (lo + hi) / 2
+    return lo, hi
+
+
 def clamp_into(rect, areas, point):
     """Where a window manager that keeps windows inside `areas` would put
     a window asked to go to `rect`: unchanged if it already fits (it may
@@ -99,15 +126,29 @@ class DragPlacement:
     def dragging(self):
         return self._grab is not None
 
-    def update(self, pointer, win_size, areas, limits):
+    def update(self, pointer, win_size, areas, limits, box=None):
         """Pointer moved to `pointer`. Returns where to move the window;
-        `offset` is updated so window + offset lands under the pointer."""
+        `offset` is updated so window + offset lands under the pointer.
+        With `box` (the character's box in the window, see
+        `visible_limits`) the character stays on screen even when the
+        window is bigger than the monitor."""
         desired = (int(round(pointer[0] - self._grab[0])),
                    int(round(pointer[1] - self._grab[1])))
         self._desired = desired
         tx, ty = clamp_into((*desired, *win_size), areas, pointer)
+        if box is not None and areas:
+            limits = visible_limits(limits, (tx, ty, *win_size), box,
+                                    area_at(areas, pointer))
         self.offset = self._fit(desired, (tx, ty), limits)
         return int(tx), int(ty)
+
+    def aim(self, desired, window_pos, limits):
+        """Put the character where it would be with its window at
+        `desired` (and no offset), given the window really is at
+        `window_pos`. Used after a resize, which may leave the window
+        somewhere else when it no longer fits the screen."""
+        self._desired = (int(round(desired[0])), int(round(desired[1])))
+        self.offset = self._fit(self._desired, window_pos, limits)
 
     def end(self):
         self._grab = None

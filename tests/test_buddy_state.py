@@ -1947,11 +1947,16 @@ class TestSizePresets:
         state.set_scale(6)
         assert state.scale == 4.0 and state.scale_preset == 6
 
+    def test_xxxl(self, state):
+        state.set_scale(7)
+        assert state.scale == 5.0 and state.scale_preset == 7
+        assert state.SCALE_LABELS[7] == "XXXL"
+
     def test_every_preset_has_a_label(self, state):
         assert set(state.SCALE_LABELS) == set(state.SCALE_PRESETS)
 
     def test_unknown_preset_ignored(self, state):
-        state.set_scale(7)
+        state.set_scale(8)
         assert state.scale == 1.0 and not state._scale_changed
 
     def test_same_preset_is_not_a_resize(self, state):

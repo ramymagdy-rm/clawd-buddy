@@ -5,7 +5,8 @@
 the work-area edge and the character slides the rest of the way inside
 its own window."""
 
-from clawd_buddy.placement import DragPlacement, clamp_into, covered
+from clawd_buddy.placement import (
+    DragPlacement, clamp_into, covered, visible_limits)
 
 # The two-monitor layout this was reported on, as mutter publishes it in
 # _GTK_WORKAREAS_D0: a laptop panel at the right with no top bar, and
@@ -127,3 +128,57 @@ def test_window_position_is_whole_pixels():
     p.begin((500.4, 480.6), (400, 300))
     x, y = p.update((500.9, 100.2), WIN, AREAS, (-52.5, 52.5, -151.25, 50))
     assert isinstance(x, int) and isinstance(y, int)
+
+
+class TestBiggerThanTheScreen:
+    """XXXL (5×): a 1000×1300 window on the 1048-tall primary work area.
+    The window manager pins it to the top bar and the bottom hangs off
+    the screen, so the character must stay in the visible part."""
+    SIZE = (1000, 1300)
+    # HIT_BOX × 5 and OFFSET_LIMITS × 5 (see ui/drawing.py).
+    BOX = (220, 615, 560, 475)
+    LIMITS = (-210, 210, -605, 200)
+
+    def test_window_that_fits_is_left_alone(self):
+        assert visible_limits(LIMITS, (400, 300, *WIN), (44, 123, 112, 95),
+                              PRIMARY) == LIMITS
+
+    def test_too_tall_keeps_the_character_above_the_bottom(self):
+        x0, x1, y0, y1 = visible_limits(
+            self.LIMITS, (400, 152, *self.SIZE), self.BOX, PRIMARY)
+        assert (x0, x1) == self.LIMITS[:2]       # width still fits
+        assert y0 == self.LIMITS[2]
+        # Character bottom at 152 + 615 + 475 + y1 = the area bottom.
+        assert 152 + 615 + 475 + y1 == 152 + 1048
+
+    def test_drag_down_stops_at_the_bottom_of_the_screen(self):
+        p = DragPlacement()
+        p.begin((900, 1000), (400, 152))
+        win = p.update((900, 5000), self.SIZE, AREAS, self.LIMITS,
+                       box=self.BOX)
+        assert win[1] == 152
+        assert 152 + 615 + 475 + p.offset[1] <= 1200
+
+    def test_drag_up_still_reaches_the_top_bar(self):
+        p = DragPlacement()
+        p.begin((900, 900), (400, 152))
+        p.update((900, 300), self.SIZE, AREAS, self.LIMITS, box=self.BOX)
+        assert 152 + 615 + p.offset[1] == 152 + 615 - 600
+
+    def test_aim_after_growing(self):
+        # Feet were at y 1100; at 5× they sit 1070 below the window top,
+        # so the window "should" be at y 30, but it's pinned at 152.
+        p = DragPlacement()
+        limits = visible_limits(self.LIMITS, (400, 152, *self.SIZE),
+                                self.BOX, PRIMARY)
+        p.aim((400, 1100 - 1070), (400, 152), limits)
+        assert p.offset == (0, -122)
+        # The window manager put it somewhere else after all: re-aim.
+        assert p.reconcile((400, 160), limits)
+        assert p.offset == (0, -130)
+
+    def test_box_that_cannot_fit_is_centred(self):
+        tiny = (0, 0, 800, 400)
+        x0, x1, y0, y1 = visible_limits(
+            self.LIMITS, (0, 0, *self.SIZE), self.BOX, tiny)
+        assert y0 == y1

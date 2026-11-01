@@ -23,14 +23,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   `scripts/release_tool.py`, and the decisions it makes are tested in
   `tests/test_release_tool.py`.
 
-- **Size menu, with XL and XXL.** The tray menu has a **Size** submenu:
-  S (1×), M (1.25×), L (1.5×), L+ (2×), and the new XL (3×) and XXL
-  (4×). Before, sizes were only reachable with Ctrl+1–4 while the buddy
-  had focus; Ctrl+5 and Ctrl+6 now pick XL and XXL. The size is
-  remembered across restarts, and resizing keeps the buddy's feet where
-  they were instead of growing the window from its top-left corner. XXL's
-  800×1040 window is the largest that fits a 1080p screen under a top
-  bar.
+- **Size menu, with XL, XXL and XXXL.** The tray menu has a **Size**
+  submenu: S (1×), M (1.25×), L (1.5×), L+ (2×), and the new XL (3×),
+  XXL (4×) and XXXL (5×). Before, sizes were only reachable with
+  Ctrl+1–4 while the buddy had focus; Ctrl+5, Ctrl+6 and Ctrl+7 now
+  pick XL, XXL and XXXL. The size is remembered across restarts, and
+  resizing keeps the buddy's feet where they were instead of growing the
+  window from its top-left corner. XXL's 800×1040 window is the largest
+  that fits a 1080p screen under a top bar; XXXL's 1000×1300 window
+  hangs off the bottom of the screen, and the buddy slides up inside it
+  so it stays in view, including while it's dragged.
 
 - **Character themes.** Eight new themes dress the buddy up as
   characters: **Nemo** (orange with white, black-edged stripes), **Dory**
