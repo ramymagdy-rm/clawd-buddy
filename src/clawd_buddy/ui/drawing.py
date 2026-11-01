@@ -961,9 +961,13 @@ class BuddyRenderer:
 
 # ── character costumes (see themes.COSTUMES) ─────────────────────────
 def _rrect_span(x, rx, ry, rw, rh, r):
-    """Top and bottom y of a rounded rectangle at column x, or None."""
-    if x < rx or x > rx + rw:
+    """Top and bottom y of a rounded rectangle at column x, or None.
+    Columns a rounding error past an edge count as on it: shapes that
+    sample right up to the edge (hair, stripes) would otherwise lose
+    their last column on some frames and flicker as the body breathes."""
+    if x < rx - 1e-6 or x > rx + rw + 1e-6:
         return None
+    x = min(max(x, rx), rx + rw)
     if x < rx + r:
         dx = rx + r - x
     elif x > rx + rw - r:
@@ -978,7 +982,7 @@ def _clipped_band(rect, x0, x1, y0, y1, steps=12):
     """Polygon of the box (x0..x1, y0..y1) cut to the rounded `rect`."""
     top, bottom = [], []
     for i in range(steps + 1):
-        x = x0 + (x1 - x0) * i / steps
+        x = x0 + (x1 - x0) * (i / steps)
         span = _rrect_span(x, *rect)
         if span is None:
             continue
