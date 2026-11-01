@@ -12,13 +12,12 @@ without pulling in heavier dependencies (pygame, ctypes, etc.).
 # active scale preset.
 WIN_W, WIN_H = 200, 260
 
-# Character bounding box inside the window. The buddy's body, arms, legs
-# and indicators are all positioned relative to this.
-CHAR_W, CHAR_H = 80, 62
-
-# Rendering frame rate target for the main loop. Pygame clock ticks at
-# this rate; idle CPU stays low because most frames are no-ops.
-FPS = 120
+# Frame rates for the main loop. It runs at FPS_ACTIVE while something
+# moves quickly (a reaction, confetti, a pose transition, a drag) and
+# drops to FPS_IDLE for the gentle idle / thinking loops, which is where
+# the buddy spends almost all of its time.
+FPS_ACTIVE = 60
+FPS_IDLE = 30
 
 # Color-key for Windows transparency. Any pixel painted in this exact
 # colour becomes invisible on Win32 (LWA_COLORKEY). Drawing code MUST
@@ -29,3 +28,8 @@ TKEY = (1, 1, 1)
 # signals from `clawd-buddy --send` / `--wave` / `--prompt-start` / etc.
 SOCK_HOST = "127.0.0.1"
 SOCK_PORT = 44556
+
+# Pages of the settings & About window, in sidebar order. Here rather
+# than in ui.about so the CLI can offer `--settings PAGE` without
+# importing any UI code.
+SETTINGS_PAGES = ("buddy", "sound", "reminders", "focus", "about")

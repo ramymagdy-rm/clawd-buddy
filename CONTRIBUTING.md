@@ -75,10 +75,11 @@ clawd-buddy/
 │   ├── cli.py             # argparse + read_hook_stdin
 │   ├── config.py          # ~/.config/clawd-buddy persistence
 │   ├── ipc.py             # JSON-over-TCP protocol + dispatcher + client
+│   ├── placement.py       # Drag placement: window vs. character offset
 │   ├── ui/
 │   │   ├── themes.py      # 8 color theme registry
 │   │   ├── sound.py       # Procedural PCM generators + pack registry
-│   │   ├── drawing.py     # rounded_rect + draw_buddy
+│   │   ├── drawing.py     # BuddyRenderer (character, pill, bubble) + compose_frame
 │   │   ├── about.py       # About dialog + shared buddy icon
 │   │   ├── tray.py        # pystray icon + right-click menu
 │   │   └── sni.py         # Linux tray backend (StatusNotifierItem + DBusMenu)
@@ -111,8 +112,10 @@ Each module is focused and independently testable. See
   session-greeting dedup logic.
 - **`ipc.py`** — socket listener thread plus the pure
   `parse_message` / `dispatch_action` functions used by tests.
-- **`ui/`** — anything visual or audible: themes, sound packs, drawing
-  primitives, About dialog, tray.
+- **`ui/`** — anything visual or audible: themes, sound packs, the
+  renderer, About dialog, tray. `drawing.py` authors everything in
+  logical 1x units, so the same code renders at every window scale and
+  2x supersampled on transparent windows.
 - **`platform/`** — every line of platform-specific code lives behind a
   cross-platform facade (`get_window_handle`, `setup_window`, …). The
   `_windows.py` / `_linux.py` impls are only imported when their OS
@@ -137,8 +140,11 @@ Each module is focused and independently testable. See
 
 1. Add the state name to `state.py` (mode constant, `BuddyState`
    property, trigger method that goes through `_request`)
-2. Add drawing logic in `ui/drawing.py`'s `draw_buddy` — follow the
-   `cel` / `wav` / `greet` / `think` branches
+2. In `ui/drawing.py`, give the mode a pose in
+   `BuddyRenderer._target_pose`, a face in `_draw_face`, and (if it
+   should show the status pill) an entry in `STATUS_TEXT` and `ACCENT`
+   plus an icon in `_status_icon`. Add it to `REACTIVE` if it should run
+   at the fast frame rate
 3. Add a new action constant in `ipc.py`'s `ACTION_*` block and route
    it in `dispatch_action`
 4. Add a CLI flag in `cli.py` and handle it in `main()` (build the

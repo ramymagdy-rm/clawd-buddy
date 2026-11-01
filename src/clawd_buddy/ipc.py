@@ -14,14 +14,15 @@ Protocol layout:
 
 Supported actions (and the BuddyState method they invoke):
 
-    celebrate      → state.trigger()
-    wave           → state.wave()
+    celebrate      → state.trigger(session_id=…)   (a session's Stop)
+    wave           → state.wave(session_id=…)
     raise          → state.bring_to_front()
+    settings       → state.open_settings(page=…)   (the settings window)
     quit           → sets state.should_quit
     prompt_start   → state.prompt_start(session_id=…)
     greet          → state.greet(session_id=…)
-    thinking_start → state.start_thinking()
-    thinking_end   → state.end_thinking()
+    thinking_start → state.start_thinking(session_id=…)
+    thinking_end   → state.end_thinking(session_id=…)
     message        → state.set_message(text=…)             (M2)
     status         → server replies with JSON status        (M2)
     <anything else> → state.trigger()   (defensive default for older clients)
@@ -40,7 +41,7 @@ import os
 import socket
 
 from . import __version__
-from .constants import SOCK_HOST, SOCK_PORT
+from .constants import SETTINGS_PAGES, SOCK_HOST, SOCK_PORT
 
 
 # Names every consumer can reference. Keeping them as constants rather
@@ -59,6 +60,7 @@ ACTION_STATUS = "status"
 ACTION_DRANK = "drank"   # M4: water-reminder acknowledgment
 ACTION_POMODORO_START = "pomodoro_start"   # M6: start work/break cycle
 ACTION_POMODORO_STOP = "pomodoro_stop"     # M6: end the cycle
+ACTION_SETTINGS = "settings"   # open the settings & About window
 
 KNOWN_ACTIONS = frozenset({
     ACTION_CELEBRATE,
@@ -74,6 +76,7 @@ KNOWN_ACTIONS = frozenset({
     ACTION_DRANK,
     ACTION_POMODORO_START,
     ACTION_POMODORO_STOP,
+    ACTION_SETTINGS,
 })
 
 
@@ -123,20 +126,25 @@ def dispatch_action(state, action, payload=None):
     payload = payload or {}
     if "workspace" in payload:
         state.record_workspace(payload.get("workspace"))
+    # Several Claude Code sessions can share one buddy: the hook's
+    # session id says which one prompted, waits on permission or
+    # stopped, so one session's Stop leaves the others thinking.
+    session = {"session_id": payload.get("session_id"),
+               "workspace": payload.get("workspace")}
     if action == ACTION_WAVE:
-        state.wave()
+        state.wave(**session)
     elif action == ACTION_RAISE:
         state.bring_to_front()
     elif action == ACTION_QUIT:
         state.should_quit = True
     elif action == ACTION_PROMPT_START:
-        state.prompt_start(session_id=payload.get("session_id"))
+        state.prompt_start(**session)
     elif action == ACTION_GREET:
         state.greet(session_id=payload.get("session_id"))
     elif action == ACTION_THINKING_START:
-        state.start_thinking()
+        state.start_thinking(**session)
     elif action == ACTION_THINKING_END:
-        state.end_thinking()
+        state.end_thinking(session_id=session["session_id"])
     elif action == ACTION_MESSAGE:
         state.set_message(payload.get("text", ""))
     elif action == ACTION_STATUS:
@@ -154,11 +162,14 @@ def dispatch_action(state, action, payload=None):
             break_s=payload.get("break_seconds"))
     elif action == ACTION_POMODORO_STOP:
         state.stop_pomodoro()
+    elif action == ACTION_SETTINGS:
+        page = payload.get("page")
+        state.open_settings(page if page in SETTINGS_PAGES else None)
     else:
         # Defensive default: any unrecognised action celebrates. This
         # preserves backward-compat with older buddy clients that sent
         # the literal "done" or empty string for a Stop hook.
-        state.trigger()
+        state.trigger(**session)
     state.record_action(action if action in KNOWN_ACTIONS else ACTION_CELEBRATE)
     return action in KNOWN_ACTIONS
 
@@ -267,6 +278,7 @@ def build_status_response(state, port=SOCK_PORT, topmost=True):
         "port": port,
         "mode": state.mode,
         "queue_depth": state.queue_depth,
+        "working_sessions": state.working_sessions,
         "last_session_id": state.last_session_id,
         "last_action": state.last_action,
         "last_action_ts": (state.last_action_ts

@@ -195,6 +195,32 @@ def save_volume_pref(v):
     save_config(cfg)
 
 
+# ── Size ─────────────────────────────────────────────────────────────
+# Preset numbers match BuddyState.SCALE_PRESETS (1 = S … 7 = XXXL).
+SCALE_PRESET_NUMBERS = (1, 2, 3, 4, 5, 6, 7)
+
+
+def load_saved_scale_preset():
+    """Return the persisted size preset, defaulting to 1 (S). Unknown
+    values fall back too, so a hand-edited config can't open a giant
+    or zero-sized window."""
+    preset = load_config().get("size", 1)
+    if isinstance(preset, bool) or preset not in SCALE_PRESET_NUMBERS:
+        return 1
+    return preset
+
+
+def save_scale_pref(preset):
+    """Persist the size preset (tray Size menu, Ctrl+1..7)."""
+    if isinstance(preset, bool) or preset not in SCALE_PRESET_NUMBERS:
+        return
+    cfg = load_config()
+    if cfg.get("size") == preset:
+        return
+    cfg["size"] = preset
+    save_config(cfg)
+
+
 # ── M7: workspace badge toggle ───────────────────────────────────────
 def load_saved_workspace_badge():
     """Return the persisted workspace-badge toggle, defaulting to True.

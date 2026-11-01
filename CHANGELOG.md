@@ -23,8 +23,144 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   `scripts/release_tool.py`, and the decisions it makes are tested in
   `tests/test_release_tool.py`.
 
+- **Size menu, with XL, XXL and XXXL.** The tray menu has a **Size**
+  submenu: S (1×), M (1.25×), L (1.5×), L+ (2×), and the new XL (3×),
+  XXL (4×) and XXXL (5×). Before, sizes were only reachable with
+  Ctrl+1–4 while the buddy had focus; Ctrl+5, Ctrl+6 and Ctrl+7 now
+  pick XL, XXL and XXXL. The size is remembered across restarts, and
+  resizing keeps the buddy's feet where they were instead of growing the
+  window from its top-left corner. XXL's 800×1040 window is the largest
+  that fits a 1080p screen under a top bar; XXXL's 1000×1300 window
+  hangs off the bottom of the screen, and the buddy slides up inside it
+  so it stays in view, including while it's dragged.
+
+- **Character themes.** Eight new themes dress the buddy up as
+  characters: **Nemo** (orange with white, black-edged stripes), **Dory**
+  (blue with a black marking and yellow fins), **Batman** (cowl ears and
+  a yellow bat emblem), **Iron Man** (red armour, gold faceplate, arc
+  reactor), **Hulk** (black spiky hair, purple shorts), **Spider-Man**
+  (a web across the mask, blue arms), **Captain** (a star shield, red
+  gloves and boots) and **Pikachu** (black-tipped ears, red cheeks).
+  Besides colours, each wears a small costume drawn on top: stripes,
+  ears, hair, an emblem or a web. They're listed below the classic
+  palettes in the tray's Theme menu, in their own row in the settings
+  window, and work with `--theme`. They're fan-made tributes, not
+  affiliated with the characters' owners.
+
+- **More characters, princesses and animals (38 themes in all).** New
+  characters: **Minion** (goggles and overalls), **Wall-E** (binocular
+  eyes), **Superman** (cape and S shield), **Stitch** (huge ears),
+  **Kirby**, **Buzz** (purple hood, green panels) and **Deadpool** (eye
+  patches). Princesses, with a face, their hair and their gown:
+  **Elsa** (a braid), **Ariel**, **Belle**, **Cinderella** (a headband),
+  **Snow White** (a bob and a bow), **Jasmine** and **Rapunzel** (hair
+  that pools on the floor). Animals: **Panda**, **Fox**, **Cat**,
+  **Tiger**, **Penguin** (a beak), **Frog**, **Bunny** and **Lion** (a
+  mane). The settings window switches between Classic, Characters,
+  Princesses and Animals instead of listing every theme in a row, and
+  the tray's Theme menu has a submenu for each group.
+
+- **Dock icon and app launcher (Linux).** The buddy installs a
+  `clawd-buddy.desktop` launcher with a 256 px icon, and names its
+  windows `clawd-buddy` instead of `app.py`. The dock now shows "Clawd
+  Buddy" with the buddy icon, the buddy is in the app grid and can be
+  pinned, and the dock icon's menu has Settings and Quit. Starting the
+  buddy again while it runs opens its settings window instead of saying
+  hello.
+
+- **A settings window that controls everything.** The old About dialog
+  is now a modern window with a sidebar and five pages. **Buddy** shows
+  what the buddy is doing (a chip per working workspace) and has
+  Celebrate, Bring to front, Center on screen, size, theme, reduce
+  motion, workspace badges and start at login. **Sound** has the sound
+  pack, volume, and quiet hours with any start and end time (the tray
+  only offers presets). **Reminders** shows today's cups with a bar
+  chart of recent days, plus the whole reminder schedule. **Focus** is a
+  pomodoro timer with a live countdown ring, so a cycle no longer needs
+  the command line. **About** has the version, links and shortcuts.
+  Changes apply at once and are saved, and changes from the tray or the
+  keyboard show up while it's open. It follows the desktop's light or
+  dark preference. Open it by right-clicking the buddy, from the tray
+  (**Settings & About…**, formerly **About…**), or with the new
+  `clawd-buddy --settings [PAGE]`. The `--settings` route also works on
+  desktops with no tray menu. Over HTTP the `settings` action needs
+  `--http-token`, like `quit`.
+
+### Changed
+
+- **A new look, inspired by Codex pets.** The buddy is redrawn as a
+  rounder, softer screen pet: glowing pill eyes and blush on its
+  screen, nub arms and feet, and squash and stretch when it hops. A
+  floating status pill above its head says what the assistant is doing
+  ("Thinking…", "Needs input", "Done", "New session") in the same
+  green / yellow / cyan / purple as before, and replaces the pulsing
+  border. The workspace badge now sits at the front of that pill.
+  Switching states crossfades the pose instead of snapping. With a
+  compositor (Linux) edges are antialiased, and the buddy gets a soft
+  ground shadow and a coloured glow while it reacts. Windows keeps hard
+  edges, because anything translucent would blend into its colour-key
+  background as a dark halo. Ctrl+2/3/4 now render at full resolution
+  instead of upscaling a blurry 1x frame. The tray icon, window icon and
+  README images match the new design.
+- **Much lighter on the CPU.** The main loop used to redraw at 120 FPS
+  all the time; it now runs at 60 FPS only while something moves
+  quickly (a reaction, confetti, a transition, a drag) and at 30 FPS
+  otherwise. Each frame only filters and uploads the part of the window
+  that has something in it.
+- **Faster hooks.** `clawd-buddy --send` / `--wave` / `--prompt-start`
+  no longer import pygame, Pillow or the tray, so each hook call
+  returns sooner (about 55 ms instead of 90 ms here). They also stop
+  printing pygame's "pygame-ce 2.x.x" banner, which Claude Code showed
+  as hook output.
+
 ### Fixed
 
+- **The settings window could take 40 seconds to open (Linux).** Tk
+  asks the input method (ibus, fcitx) for a context for every widget,
+  so a busy input-method daemon stalled the window. It has no text
+  fields, so it now opts out of input methods and opens in about a
+  second regardless.
+
+- **The buddy's invisible window blocked clicks (Linux).** The whole
+  transparent rectangle around the buddy swallowed clicks, so it got in
+  the way of menus and buttons underneath. Only the buddy itself takes
+  input now (X SHAPE input region); clicks anywhere else go through to
+  what's behind it. Windows already let clicks through its colour-keyed
+  background.
+- **The buddy couldn't be dragged near the top of the screen (Linux).**
+  Window managers such as mutter keep a window inside the monitor's work
+  area, and the buddy's window has room above its head for the pill,
+  bubble and confetti, so the buddy itself stopped ~140 px below the top
+  bar. Now, once the window can't go further, the buddy keeps following
+  the pointer inside its own window, up to the top and sides of the
+  screen, and the pill and bubble move below it when there's no room
+  above. The window manager's limits are read per monitor from
+  `_GTK_WORKAREAS_D0` (or `_NET_WORKAREA`) and double-checked after each
+  drag.
+- **Resizing threw the buddy into the top-left corner, where it seemed
+  stuck (Linux).** After the window existed, pygame reported the
+  *window's* size as the screen size, so every resize clamped the buddy
+  into the top-left corner of the screen, against two edges. **Center on
+  Screen** and **Bring to Front** had the same bug. The screen size now
+  comes from the desktop, the buddy stays on the monitor it's on (using
+  the window manager's work areas), and the clickable region is sent
+  again once a resize has landed, in case the window manager worked it
+  out against the old size.
+- **With several Claude Code sessions, one finishing hid the others.**
+  The buddy had a single "thinking" state, so the first session to stop
+  sent it back to idle while the rest were still working, and pressing
+  Space (or the tray's celebrate entry, or a pomodoro break) did the
+  same. Each session is now tracked from its prompt to its own `Stop`,
+  using the `session_id` the hooks already pipe in, which `--send` and
+  `--wave` now pass along too. The buddy keeps thinking while any
+  session is working. Space, the tray entry, `--test` and pomodoro
+  breaks only play the celebration. The thinking pill shows a workspace
+  chip for every working session, not just the last one to signal, and
+  a count ("Thinking ×2"). Sessions taking turns no longer greet each
+  other as new on every prompt, and a `Stop` that arrives during the
+  greeting no longer gets stuck in the queue. A `Stop` without a session
+  id (an older client, or `--send` typed by hand) still ends them all.
+  `--status` reports `working_sessions`.
 - **Release builds could pick up untracked files.** The documented
   `uv build` ran in the working tree, and hatchling packs every file that
   isn't gitignored into the sdist, so local scratch files could ship to
