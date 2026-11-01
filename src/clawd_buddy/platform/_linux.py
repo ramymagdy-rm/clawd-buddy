@@ -443,6 +443,95 @@ def _linux_enable_startup():
     print(f"[buddy] Enabled run at login")
     print(f"        {path}")
 
+# ═══════════════════════════════════════════════════════════════════
+# App launcher — so the dock (and Activities search) shows the buddy
+# ═══════════════════════════════════════════════════════════════════
+# GNOME, KDE and friends name and draw a window in the dock from the
+# .desktop file whose StartupWMClass matches the window's WM_CLASS.
+# Without one the settings window shows up as "app.py" with a generic
+# icon. Installed per user, refreshed on every start.
+WM_CLASS = "clawd-buddy"
+_LAUNCHER_DIR = os.path.expanduser("~/.local/share/applications")
+_ICON_PATH = os.path.expanduser(
+    "~/.local/share/icons/hicolor/256x256/apps/clawd-buddy.png")
+
+
+def _desktop_quote(arg):
+    """Quote one Exec argument per the Desktop Entry spec."""
+    arg = arg.replace("%", "%%")   # % starts a field code
+    if not any(c in arg for c in ' \t\n"\'\\><~|&;$*?#()`'):
+        return arg
+    escaped = arg.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = escaped.replace("`", "\\`").replace("$", "\\$")
+    return f'"{escaped}"'
+
+
+def launcher_command(argv0=None, python=None):
+    """The command that starts this very install of the buddy: its
+    `clawd-buddy` script when it was started through one, otherwise
+    `python -m clawd_buddy.app` with the running interpreter."""
+    argv0 = argv0 if argv0 is not None else sys.argv[0]
+    python = python or sys.executable
+    if (os.path.basename(argv0).startswith("clawd-buddy")
+            and os.path.isfile(argv0)):
+        return [os.path.abspath(argv0)]
+    return [python, "-m", "clawd_buddy.app"]
+
+
+def launcher_desktop_entry(cmd, icon_path):
+    """Text of the launcher .desktop file for the command `cmd`."""
+    exe = " ".join(_desktop_quote(a) for a in cmd)
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Clawd Buddy\n"
+        "GenericName=Desktop pet\n"
+        "Comment=An animated desktop pet that reacts to Claude Code\n"
+        f"Exec={exe}\n"
+        f"Icon={icon_path}\n"
+        "Terminal=false\n"
+        "Categories=Utility;\n"
+        "Keywords=claude;pet;buddy;pomodoro;\n"
+        f"StartupWMClass={WM_CLASS}\n"
+        "StartupNotify=false\n"
+        "Actions=settings;quit;\n"
+        "\n"
+        "[Desktop Action settings]\n"
+        "Name=Settings\n"
+        f"Exec={exe} --settings\n"
+        "\n"
+        "[Desktop Action quit]\n"
+        "Name=Quit\n"
+        f"Exec={exe} --quit\n"
+    )
+
+
+def _write_if_changed(path, data):
+    """Write `data` (bytes) to `path` unless it already holds exactly
+    that. Returns True when it wrote."""
+    try:
+        with open(path, "rb") as f:
+            if f.read() == data:
+                return False
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+    return True
+
+
+def _linux_install_launcher(icon_png):
+    """Install (or refresh) the per-user launcher and its icon.
+    `icon_png` is the 256×256 icon as PNG bytes."""
+    _write_if_changed(_ICON_PATH, icon_png)
+    entry = launcher_desktop_entry(launcher_command(), _ICON_PATH)
+    path = os.path.join(_LAUNCHER_DIR, _DESKTOP_NAME)
+    return _write_if_changed(path, entry.encode())
+
+
 def _linux_disable_startup():
     path = os.path.join(_LINUX_AUTOSTART_DIR, _DESKTOP_NAME)
     if os.path.exists(path):

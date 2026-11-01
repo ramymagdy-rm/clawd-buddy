@@ -289,6 +289,23 @@ def enable_startup():
         print(f"[buddy] Startup not supported on {sys.platform}")
 
 
+def install_launcher():
+    """Linux: install the per-user app launcher (.desktop file + icon),
+    so the dock and Activities show "Clawd Buddy" with the buddy icon
+    and the dock icon can be pinned. Best-effort; no-op elsewhere."""
+    if sys.platform != "linux":
+        return False
+    try:
+        import io
+        from ..ui.about import _make_buddy_icon_image
+        buf = io.BytesIO()
+        _make_buddy_icon_image(256).save(buf, format="PNG")
+        return _impl._linux_install_launcher(buf.getvalue())
+    except Exception as e:  # read-only home, no Pillow, …
+        print(f"[buddy] App launcher not installed: {e}")
+        return False
+
+
 def startup_supported():
     """True where run-at-login is implemented (Windows, Linux)."""
     return sys.platform in ("win32", "linux")

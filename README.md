@@ -713,17 +713,38 @@ curl -X POST localhost:8787/signal -d '{"action": "celebrate"}'
 
 ### Single instance
 
-Only one buddy can run at a time. If you launch `clawd-buddy` while one is already running, it sends a signal to the existing instance and exits.
+Only one buddy can run at a time. If you launch `clawd-buddy` while one is already running (from a terminal, the dock or the app grid), it opens the running buddy's settings window and exits.
+
+### Dock icon and app launcher (Linux)
+
+On Linux the buddy installs a launcher for itself each time it starts:
+`~/.local/share/applications/clawd-buddy.desktop`, with a 256 px buddy
+icon in `~/.local/share/icons/hicolor/256x256/apps/clawd-buddy.png`. Its
+windows are named `clawd-buddy`, so the dock shows **Clawd Buddy** with
+the buddy icon (not "app.py" with a generic one), and you can find it in
+Activities / the app grid.
+
+- Right-click it in the app grid and choose **Pin to Dash** (or **Add to
+  Favorites**) to keep it on the dock. Clicking it starts the buddy, or
+  opens its settings when it's already running.
+- Right-clicking the dock icon also offers **Settings** and **Quit**.
+- The launcher runs the copy of the buddy that installed it (the
+  `clawd-buddy` script, or `python -m clawd_buddy.app` from that
+  environment), so it's refreshed whenever you start another install.
+- To remove it, delete those two files.
+
+The buddy itself stays off the dock and Alt-Tab while it runs; it's a
+pet, not a window.
 
 ### System tray
 
 The buddy adds a system tray icon with a right-click menu:
 
 - **Test Celebration** — trigger the celebrate animation
-- **Size** — S (1×), M (1.25×), L (1.5×), L+ (2×), XL (3×) or XXL (4×); same as Ctrl+1…6, remembered across restarts
+- **Size** — S (1×), M (1.25×), L (1.5×), L+ (2×), XL (3×), XXL (4×) or XXXL (5×); same as Ctrl+1…7, remembered across restarts
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
 - **Center on Screen** — move the buddy to the middle of the screen (recovers a dragged-away or off-screen window)
-- **Theme** — pick one of the 16 themes: the 8 classic palettes, then the 8 characters (current one is checked)
+- **Theme** — pick one of the 38 themes: the 8 classic palettes, then submenus for the characters, princesses and animals (the current one is checked, and its submenu is named after it)
 - **Sound** — pick a notification sound pack (`Off`, `Fanfare`, `Chime`, `Retro`, `Minimal`). Selecting a pack plays a preview immediately; the choice is persisted in `config.json`.
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
   - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.

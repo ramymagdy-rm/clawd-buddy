@@ -234,8 +234,9 @@ def week_bars(state, today=None):
     return past + [(today.strftime("%a")[:2], int(state.cups_today))]
 
 
-def _make_buddy_icon_image():
-    """Procedurally draw a 64x64 RGBA PIL Image of the buddy's face.
+def _make_buddy_icon_image(size=64):
+    """Procedurally draw a `size`×`size` RGBA PIL Image of the buddy's
+    face (64 for the tray and window icons, 256 for the app launcher).
 
     Used as the system-tray icon and the About-dialog window icon so
     the buddy silhouette is the branding everywhere PIL is the right
@@ -252,7 +253,7 @@ def _make_buddy_icon_image():
     """
     from PIL import Image, ImageDraw
 
-    size, ss, margin = 64, 4, 2
+    ss, margin = 4, max(2, size // 32)
     k = (size - 2 * margin) / 40 * ss  # design unit -> supersampled px
 
     def p(x, y):
