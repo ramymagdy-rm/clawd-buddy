@@ -204,6 +204,7 @@ def _run_buddy(args, port):
         get_window_handle,
         get_window_rect,
         get_work_areas,
+        install_launcher,
         move_window,
         prepare_window_transparency,
         raise_window,
@@ -265,10 +266,10 @@ def _run_buddy(args, port):
     try:
         lock_sock.bind(("127.0.0.1", port + 1))
     except OSError:
-        print("[buddy] Already running — sending signal.")
-        # Best-effort hello — the running buddy treats unknown actions as
-        # a celebrate, but a malformed payload here would just be ignored.
-        send_signal({"message": "hello"}, port=port)
+        # Started again (say, from the dock or the app grid): bring up
+        # the running buddy's settings window, like any app would.
+        print("[buddy] Already running — opening its settings.")
+        send_signal({"action": "settings"}, port=port)
         sys.exit(0)
 
     # Declare DPI awareness before any screen metric or window is created.
@@ -279,6 +280,13 @@ def _run_buddy(args, port):
     mode = set_dpi_awareness()
     if mode:
         print(f"[buddy] DPI awareness: {mode}")
+
+    # Name the window after the app, not the script ("app.py"), so the
+    # dock matches it to the Clawd Buddy launcher and its icon. SDL
+    # reads this when the display starts, just below; `import pygame`
+    # has already set it to the script name, so override it.
+    os.environ["SDL_VIDEO_X11_WMCLASS"] = "clawd-buddy"
+    os.environ["SDL_VIDEO_WAYLAND_WMCLASS"] = "clawd-buddy"
 
     # Linux: request a 32-bit ARGB window so the background is truly
     # transparent instead of a solid rectangle around the buddy. Must
@@ -302,6 +310,9 @@ def _run_buddy(args, port):
     except Exception as e:
         print(f"[buddy] Window icon failed: {e}")
     clock = pygame.time.Clock()
+    # The dock / app-grid launcher (Linux). Off the main thread: it
+    # draws a 256 px icon and touches the disk.
+    threading.Thread(target=install_launcher, daemon=True).start()
 
     handle = get_window_handle()
     setup_window(handle, topmost=not args.no_topmost)

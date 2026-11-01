@@ -60,6 +60,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   Princesses and Animals instead of listing every theme in a row, and
   the tray's Theme menu has a submenu for each group.
 
+- **Dock icon and app launcher (Linux).** The buddy installs a
+  `clawd-buddy.desktop` launcher with a 256 px icon, and names its
+  windows `clawd-buddy` instead of `app.py`. The dock now shows "Clawd
+  Buddy" with the buddy icon, the buddy is in the app grid and can be
+  pinned, and the dock icon's menu has Settings and Quit. Starting the
+  buddy again while it runs opens its settings window instead of saying
+  hello.
+
 - **A settings window that controls everything.** The old About dialog
   is now a modern window with a sidebar and five pages. **Buddy** shows
   what the buddy is doing (a chip per working workspace) and has

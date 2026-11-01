@@ -36,6 +36,7 @@ class TestFacadeExports:
         "enable_startup",
         "disable_startup",
         "auto_detach",
+        "install_launcher",
     ])
     def test_attribute_exists(self, name):
         # The whole point of the facade is a stable API across OSes; a
@@ -437,3 +438,61 @@ class TestStartupOnUnknownPlatform:
         monkeypatch.setattr(plat.sys, "platform", "haiku")
         result = plat.auto_detach()
         assert result is None
+
+
+# ── App launcher (dock icon) ─────────────────────────────────────────
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux launcher")
+class TestLauncher:
+    def _linux(self):
+        from clawd_buddy.platform import _linux
+        return _linux
+
+    def test_command_uses_the_script_it_was_started_with(self, tmp_path):
+        script = tmp_path / "clawd-buddy"
+        script.write_text("#!/bin/sh\n")
+        assert self._linux().launcher_command(str(script), "/py") == [
+            str(script)]
+
+    def test_command_falls_back_to_python_m(self):
+        assert self._linux().launcher_command("/x/app.py", "/venv/py") == [
+            "/venv/py", "-m", "clawd_buddy.app"]
+
+    def test_entry_matches_the_window_class(self):
+        text = self._linux().launcher_desktop_entry(
+            ["/my dir/python", "-m", "clawd_buddy.app"], "/i/icon.png")
+        lines = text.splitlines()
+        assert "StartupWMClass=clawd-buddy" in lines
+        assert "Icon=/i/icon.png" in lines
+        assert 'Exec="/my dir/python" -m clawd_buddy.app' in lines
+        assert 'Exec="/my dir/python" -m clawd_buddy.app --settings' in lines
+        assert 'Exec="/my dir/python" -m clawd_buddy.app --quit' in lines
+
+    def test_quote_escapes_percent(self):
+        assert self._linux()._desktop_quote("/a%b") == "/a%%b"
+
+    def test_install_writes_once(self, tmp_path, monkeypatch):
+        lx = self._linux()
+        monkeypatch.setattr(lx, "_LAUNCHER_DIR", str(tmp_path / "apps"))
+        monkeypatch.setattr(lx, "_ICON_PATH", str(tmp_path / "i" / "b.png"))
+        assert lx._linux_install_launcher(b"png") is True
+        assert (tmp_path / "i" / "b.png").read_bytes() == b"png"
+        entry = (tmp_path / "apps" / "clawd-buddy.desktop").read_text()
+        assert "Name=Clawd Buddy" in entry
+        # Unchanged on the next start: nothing rewritten.
+        assert lx._linux_install_launcher(b"png") is False
+
+    def test_facade_is_a_no_op_elsewhere(self, monkeypatch):
+        monkeypatch.setattr(plat.sys, "platform", "darwin")
+        assert plat.install_launcher() is False
+
+    def test_facade_draws_a_256_icon(self, monkeypatch):
+        got = {}
+        monkeypatch.setattr(plat.sys, "platform", "linux")
+        lx = self._linux()
+        monkeypatch.setattr(plat, "_impl", lx)
+        monkeypatch.setattr(lx, "_linux_install_launcher",
+                            lambda png: got.setdefault("png", png) and True)
+        assert plat.install_launcher()
+        import io
+        from PIL import Image
+        assert Image.open(io.BytesIO(got["png"])).size == (256, 256)
