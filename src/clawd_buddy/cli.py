@@ -166,7 +166,8 @@ def build_parser():
                          "available."))
     p.add_argument("--session-id", dest="session_id", default=None,
                    metavar="ID",
-                   help=("Session id to associate with --prompt-start. "
+                   help=("Session id to attach to --prompt-start, --send "
+                         "or --wave, so concurrent sessions are told apart. "
                          "Overrides any session_id read from stdin. Mostly "
                          "useful for testing."))
     p.add_argument("--theme", choices=list(THEMES.keys()), default=None,

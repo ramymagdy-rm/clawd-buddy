@@ -808,36 +808,39 @@ class BuddyRenderer:
             pen.polyline(fc, _arc_pts(mx, my - 1.2, 4, 2), 2.0)
 
     _PILL_FONT, _PILL_PAD, _PILL_GAP_IN, _PILL_ICON, _PILL_CHIP = 11, 7, 5, 10, 14
+    _PILL_CHIP_GAP = 3
 
     def _pill_content(self, state, mode, t, pen):
-        """(status, letter, width) of the status pill, or None when it
+        """(status, workspace labels, width) of the status pill, or None when it
         has nothing to show. Also restarts the slide-in on a change."""
         status = STATUS_TEXT.get(mode)
-        letter = (state.workspace_badge_letter()
-                  if state.workspace_badge_visible() else None)
-        if status is None and letter is None:
+        if mode == "thinking" and state.working_sessions > 1:
+            status = f"Thinking \u00d7{state.working_sessions}"
+        labels = tuple(state.workspace_badge_labels())
+        if status is None and not labels:
             self._pill_key = None
             return None
-        key = (status, letter)
+        key = (status, labels)
         if key != self._pill_key:
             self._pill_key = key
             self._pill_t = t
         w = self._PILL_PAD * 2
-        if letter:
-            w += self._PILL_CHIP
+        if labels:
+            w += len(labels) * (self._PILL_CHIP + self._PILL_CHIP_GAP) \
+                - self._PILL_CHIP_GAP
         if status:
             text_w = _font(self._PILL_FONT * pen.k, bold=True).size(
                 status)[0] / pen.k
-            w += ((self._PILL_GAP_IN if letter else 0) + self._PILL_ICON
+            w += ((self._PILL_GAP_IN if labels else 0) + self._PILL_ICON
                   + self._PILL_GAP_IN + text_w)
-        return status, letter, w
+        return status, labels, w
 
     def _draw_pill(self, pen, state, pal, mode, t, content, cx, top,
                    reduced, slide_dir):
         """Floating status pill centred on `cx` with its top at `top`
         (window space), clamped inside the window. It slides in from
         the character's side: `slide_dir` 1 = from below, -1 = above."""
-        status, letter, w = content
+        status, labels, w = content
         slide = 0.0 if reduced else 6 * slide_dir * (1 - _ease_out(
             (t - self._pill_t) / self.PILL_SLIDE_S))
         x = max(_EDGE_MARGIN, min(cx - w / 2, WIN_W - _EDGE_MARGIN - w))
@@ -854,11 +857,12 @@ class BuddyRenderer:
         gap, icon_w, chip = self._PILL_GAP_IN, self._PILL_ICON, self._PILL_CHIP
         cur = x + self._PILL_PAD
         mid = y + PILL_H / 2
-        if letter:
-            _workspace_chip(pen, letter,
-                            workspace_badge_color(state.last_workspace),
+        for i, label in enumerate(labels):
+            _workspace_chip(pen, label[0].upper(),
+                            workspace_badge_color(label),
                             cur, mid - chip / 2, chip)
-            cur += chip + gap
+            cur += chip + (gap if i == len(labels) - 1
+                           else self._PILL_CHIP_GAP)
         if status:
             _status_icon(pen, mode, cur + icon_w / 2, mid, t, pal, reduced)
             cur += icon_w + gap

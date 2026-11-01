@@ -68,6 +68,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   above. The window manager's limits are read per monitor from
   `_GTK_WORKAREAS_D0` (or `_NET_WORKAREA`) and double-checked after each
   drag.
+- **With several Claude Code sessions, one finishing hid the others.**
+  The buddy had a single "thinking" state, so the first session to stop
+  sent it back to idle while the rest were still working, and pressing
+  Space (or the tray's celebrate entry, or a pomodoro break) did the
+  same. Each session is now tracked from its prompt to its own `Stop`,
+  using the `session_id` the hooks already pipe in, which `--send` and
+  `--wave` now pass along too. The buddy keeps thinking while any
+  session is working. Space, the tray entry, `--test` and pomodoro
+  breaks only play the celebration. The thinking pill shows a workspace
+  chip for every working session, not just the last one to signal, and
+  a count ("Thinking ×2"). Sessions taking turns no longer greet each
+  other as new on every prompt, and a `Stop` that arrives during the
+  greeting no longer gets stuck in the queue. A `Stop` without a session
+  id (an older client, or `--send` typed by hand) still ends them all.
+  `--status` reports `working_sessions`.
 - **Release builds could pick up untracked files.** The documented
   `uv build` ran in the working tree, and hatchling packs every file that
   isn't gitignored into the sdist, so local scratch files could ship to

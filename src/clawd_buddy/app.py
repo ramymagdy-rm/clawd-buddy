@@ -19,7 +19,8 @@ Options:
                    session, then enter the thinking animation) and exit.
                    Reads session_id from piped JSON on stdin when run as
                    a hook command.
-  --session-id ID  Explicit session id for --prompt-start (overrides stdin)
+  --session-id ID  Explicit session id for --prompt-start / --send / --wave
+                   (overrides stdin)
   --top            Signal running buddy to re-assert always-on-top and exit
   --quit           Ask the running buddy to exit cleanly and exit
   --theme THEME    Color theme — one of: dark, light, dracula, monokai,
@@ -110,6 +111,9 @@ def main():
             or args.prompt_start or args.message is not None or args.drank
             or args.pomodoro is not None or args.pomodoro_stop):
         payload_obj = {}
+        # Claude Code passes hook metadata (session_id, cwd, …) as JSON
+        # on stdin to every hook command; from a terminal there's none.
+        hook = read_hook_stdin()
         if args.quit:
             payload_obj["action"] = "quit"
         elif args.top:
@@ -135,27 +139,21 @@ def main():
             payload_obj["text"] = args.message
         elif args.prompt_start:
             payload_obj["action"] = "prompt_start"
-            # Claude Code passes hook metadata as JSON on stdin. Prefer an
-            # explicit --session-id when given; otherwise fall back to the
-            # piped JSON. When neither is available the running buddy uses
-            # its time-based new-session heuristic.
-            hook = read_hook_stdin()
+        else:
+            payload_obj["action"] = "celebrate"
+        # Which Claude Code session is signaling, so the buddy can tell
+        # concurrent sessions apart (one's Stop mustn't end another's
+        # thinking). An explicit --session-id wins over the hook's. A
+        # prompt without one falls back to the time-based new-session
+        # heuristic; a Stop without one ends every session.
+        if payload_obj["action"] in ("prompt_start", "celebrate", "wave"):
             session_id = args.session_id or hook.get("session_id")
             if session_id:
                 payload_obj["session_id"] = session_id
-        else:
-            payload_obj["action"] = "celebrate"
         # M7: attach a workspace label to whatever signal is going out.
         # Explicit --workspace wins; otherwise derive from the hook
-        # payload's cwd (Stop / PermissionRequest hooks pipe JSON too,
-        # not just UserPromptSubmit — so re-read stdin unless the
-        # prompt-start branch already consumed it). Harmless extra key
-        # for receivers that don't care.
-        if args.prompt_start:
-            ws_cwd = hook.get("cwd")
-        else:
-            ws_cwd = read_hook_stdin().get("cwd")
-        workspace = args.workspace or workspace_label_from_cwd(ws_cwd)
+        # payload's cwd. Harmless extra key for receivers that don't care.
+        workspace = args.workspace or workspace_label_from_cwd(hook.get("cwd"))
         if workspace:
             payload_obj["workspace"] = workspace
         if send_signal(payload_obj, port=port):
@@ -350,7 +348,7 @@ def _run_buddy(args, port):
     reminder_sounds = init_reminder_sounds(user_volume=saved_volume)
 
     if args.test:
-        state.trigger()
+        state.celebrate()
 
     # The window has per-pixel alpha on Linux with a compositor; there
     # the frame is supersampled and filtered down for smooth edges.
@@ -542,11 +540,12 @@ def _run_buddy(args, port):
                     # firing, Space means "I drank" (acknowledge +
                     # reset timer). Otherwise it keeps its existing
                     # "test celebration" behaviour so users haven't
-                    # lost a familiar shortcut.
+                    # lost a familiar shortcut. Only a celebration:
+                    # sessions that are working keep thinking after it.
                     if state.reminder_active:
                         state.drink_acknowledged()
                     else:
-                        state.trigger()
+                        state.celebrate()
                 elif ev.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
                     # Ctrl+1..4 resizes the buddy. Theme switching is now
                     # exclusively via the tray Theme submenu.
