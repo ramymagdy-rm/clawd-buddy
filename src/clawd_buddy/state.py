@@ -399,6 +399,9 @@ class BuddyState:
         self.scale_preset = 1
         self._scale_changed = False
         self._raise_requested = False
+        # Settings window request from IPC (`--settings`); the main
+        # loop opens it. None, or the page to show ("" = default).
+        self._settings_requested = None
         self._center_requested = False
         # Notification sound — queued from socket / tray / key threads and
         # consumed by the main loop so mixer.play() only runs on one thread.
@@ -1137,6 +1140,10 @@ class BuddyState:
 
     def bring_to_front(self):
         self._raise_requested = True
+
+    def open_settings(self, page=None):
+        """Ask the main loop to open (or raise) the settings window."""
+        self._settings_requested = page if isinstance(page, str) else ""
 
     def center_on_screen(self):
         """Request a re-center to the middle of the screen. Like

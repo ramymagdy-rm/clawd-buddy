@@ -95,10 +95,8 @@ def _create_tray_impl(state):
         state.center_on_screen()
 
     def on_about(_icon, _item):
-        # M4: pass state so the About dialog's Reminders tab can read
-        # and mutate it. Older callers (tests) can still call
-        # show_about_dialog() without args — that path falls back to
-        # an info-only Reminders tab.
+        # The settings window edits the live state; without a state
+        # (older callers, tests) it shows only the About page.
         show_about_dialog(state)
 
     def on_quit(icon, _item):
@@ -329,7 +327,7 @@ def _create_tray_impl(state):
         ),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(f"Clawd Buddy v{APP_VERSION}", None, enabled=False),
-        pystray.MenuItem("About…", on_about),
+        pystray.MenuItem("Settings & About…", on_about),
         pystray.MenuItem("Quit", on_quit),
     )
     icon_cls = _pick_icon_class(pystray)

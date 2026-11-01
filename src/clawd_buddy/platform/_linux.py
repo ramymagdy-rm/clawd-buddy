@@ -452,6 +452,9 @@ def _linux_disable_startup():
     else:
         print(f"[buddy] Not in autostart (nothing to remove)")
 
+def _linux_startup_enabled():
+    return os.path.exists(os.path.join(_LINUX_AUTOSTART_DIR, _DESKTOP_NAME))
+
 def _linux_auto_detach():
     """Double-fork to daemonize. Returns only in the daemon process."""
     pid = os.fork()

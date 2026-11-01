@@ -289,6 +289,23 @@ def enable_startup():
         print(f"[buddy] Startup not supported on {sys.platform}")
 
 
+def startup_supported():
+    """True where run-at-login is implemented (Windows, Linux)."""
+    return sys.platform in ("win32", "linux")
+
+
+def startup_enabled():
+    """True when the buddy is set to run at login."""
+    try:
+        if sys.platform == "win32":
+            return _impl._win_startup_enabled()
+        if sys.platform == "linux":
+            return _impl._linux_startup_enabled()
+    except Exception:
+        pass
+    return False
+
+
 def disable_startup():
     if sys.platform == "win32":
         _impl._win_disable_startup()

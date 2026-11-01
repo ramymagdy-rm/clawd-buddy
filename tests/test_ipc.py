@@ -165,8 +165,16 @@ class TestDispatch:
             "celebrate", "wave", "raise", "quit",
             "prompt_start", "greet", "thinking_start", "thinking_end",
             "message", "status", "drank",
-            "pomodoro_start", "pomodoro_stop",
+            "pomodoro_start", "pomodoro_stop", "settings",
         }
+
+    def test_settings_opens_the_window_on_a_page(self, state):
+        assert ipc.dispatch_action(state, "settings", {"page": "focus"})
+        assert state._settings_requested == "focus"
+
+    def test_settings_ignores_unknown_pages(self, state):
+        ipc.dispatch_action(state, "settings", {"page": "../etc"})
+        assert state._settings_requested == ""
 
     def test_message_sets_bubble_text(self, state):
         ipc.dispatch_action(state, "message", {"text": "hello"})

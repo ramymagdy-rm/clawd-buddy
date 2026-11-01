@@ -14,7 +14,7 @@ import json
 import sys
 
 from . import __version__ as APP_VERSION
-from .constants import SOCK_PORT
+from .constants import SETTINGS_PAGES, SOCK_PORT
 from .ui.themes import THEMES
 
 
@@ -120,6 +120,7 @@ def build_parser():
             "  clawd-buddy --status       Print running buddy state as JSON\n"
             "  clawd-buddy --pomodoro 25/5   Start a 25min work / 5min break cycle\n"
             "  clawd-buddy --pomodoro-stop   End the running pomodoro cycle\n"
+            "  clawd-buddy --settings        Open the settings window\n"
             "  clawd-buddy --http-port 8787  Also accept signals over HTTP (localhost)\n"
             "  clawd-buddy --wave --workspace api   Wave, badged as workspace 'api'\n"
             "  clawd-buddy --prompt-start Greet (if new session) + start thinking\n"
@@ -202,6 +203,11 @@ def build_parser():
     p.add_argument("--pomodoro-stop", dest="pomodoro_stop",
                    action="store_true",
                    help="End the running buddy's pomodoro cycle.")
+    p.add_argument("--settings", nargs="?", const="buddy", default=None,
+                   choices=SETTINGS_PAGES, metavar="PAGE",
+                   help=("Open the running buddy's settings window, "
+                         "optionally on a page: "
+                         + ", ".join(SETTINGS_PAGES) + "."))
     # M6: HTTP webhook listener — launch-time flags (only meaningful
     # when starting the buddy, ignored by signal-and-exit invocations).
     p.add_argument("--http-port", dest="http_port", type=int, default=None,

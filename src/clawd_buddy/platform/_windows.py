@@ -252,6 +252,15 @@ def _win_enable_startup():
     print(f"[buddy] Enabled run at startup")
     print(f"        HKCU\\{_WIN_RUN_KEY}\\{_WIN_RUN_VALUE} = {command}")
 
+def _win_startup_enabled():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY,
+                            0, winreg.KEY_READ) as key:
+            winreg.QueryValueEx(key, _WIN_RUN_VALUE)
+        return True
+    except OSError:
+        return False
+
 def _win_disable_startup():
     removed = False
     try:

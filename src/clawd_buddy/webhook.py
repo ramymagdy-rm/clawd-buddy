@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .constants import SOCK_PORT
 from .ipc import (
     ACTION_QUIT,
+    ACTION_SETTINGS,
     build_status_response,
     dispatch_action,
     parse_message,
@@ -139,10 +140,13 @@ class _WebhookHandler(BaseHTTPRequestHandler):
             self._send_json(401, {"error": "missing or bad token"})
             return
         action, msg = parse_message(raw)
-        if action == ACTION_QUIT and self.server.token is None:
-            # No-token deployments get the cosmetic surface only.
+        if (action in (ACTION_QUIT, ACTION_SETTINGS)
+                and self.server.token is None):
+            # No-token deployments get the cosmetic surface only. Any
+            # web page can POST to localhost, so neither quitting nor
+            # popping up the settings window is open to them.
             self._send_json(403, {
-                "error": "quit over HTTP requires --http-token"})
+                "error": f"{action} over HTTP requires --http-token"})
             return
         print(f"[buddy] HTTP signal: {action}")
         dispatch_action(self.server.state, action, msg)

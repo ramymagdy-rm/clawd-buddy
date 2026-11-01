@@ -32,6 +32,27 @@ and antialiased edges.
 > finishes, the buddy celebrates and then goes back to thinking for the
 > others; the pill reads "Thinking ×2" while two are working.
 
+### Settings window
+
+**Right-click the buddy** (or pick **Settings & About…** in the tray
+menu, or run `clawd-buddy --settings`) to open one window that
+controls everything:
+
+| Page | What's there |
+| --- | --- |
+| **Buddy** | What the buddy is doing right now (with a chip per working workspace), Celebrate / Bring to front / Center on screen, size, theme, reduce motion, workspace badges, start at login |
+| **Sound** | Sound pack (picking one plays a preview), volume, quiet hours with any start and end time |
+| **Reminders** | Today's cups and a bar chart of recent days, an **I drank water** button, and the reminder schedule: on/off, how often, when the day starts, sound, overnight pause |
+| **Focus** | A pomodoro timer with a live countdown ring: focus and break lengths, Start / Restart / Stop |
+| **About** | Version, source link, the settings folder, keyboard shortcuts |
+
+Every change applies to the buddy at once and is saved; there is no
+Save button. Changes made elsewhere (the tray menu, Ctrl+1…6) show up
+in the window while it's open. It follows your desktop's light or dark
+preference. `clawd-buddy --settings focus` opens it on a given page,
+and the sidebar's **Quit Clawd Buddy** button asks for a second click
+before it closes the buddy.
+
 ### Notification sound packs
 
 Pick the audio style from the system-tray right-click menu → **Sound**.
@@ -87,14 +108,15 @@ quiet hours off.
 
 The buddy can nudge you to drink water on a schedule. Off by default
 — turn it on from the system tray (**Water Reminder** toggle) or
-from the **About → Reminders** tab where every preference lives:
+from the settings window's **Reminders** page, where every preference
+lives:
 
 | Setting | Options |
 | --- | --- |
-| **Interval** | `30 min`, `1 h` (default), `1.5 h`, `2 h`, `4 h` — picked from a scrolling dropdown directly under the **Remind me to drink water** checkbox |
-| **Start reminders at** | HH:MM combobox (30-min steps, default **08:00**). The day's schedule cycles from this anchor: with start=09:00 and interval=1 h, reminders land at 09:00, 10:00, 11:00, … |
-| **Sound** | `water` (default — high-pitched bell), `chime` (calmer two-bell pair), `beep` (square-wave triple-blip), or `off` for visual-only |
-| **Quiet hours** | Default **23:00–08:00**, edited via HH:MM comboboxes in 30-min increments. Pick the same time for both endpoints to disable. |
+| **How often** | `30m`, `1h` (default), `1.5h`, `2h`, `4h` |
+| **Day starts at** | A time in 30-min steps (default **08:00**). The day's schedule cycles from this anchor: with 09:00 and every 1 h, reminders land at 09:00, 10:00, 11:00, … |
+| **Sound** | `water` (default — high-pitched bell), `chime` (calmer two-bell pair), `beep` (square-wave triple-blip), or `off` for visual-only. Picking one plays it |
+| **Pause overnight** | On by default, **23:00–08:00**, in 30-min steps. Switch it off to be reminded around the clock |
 
 When the reminder fires:
 
@@ -117,7 +139,7 @@ block in `config.json` (`enabled`, `interval`, `anchor_minute`,
 
 ### Drinking history
 
-Every drink-ack — Space, the tray entry, the About-window button, or
+Every drink-ack — Space, the tray entry, the settings-window button, or
 `clawd-buddy --drank` — increments a per-day cup counter that lives in
 **`~/.clawd-buddy/history.json`** (`C:\Users\<name>\.clawd-buddy\` on
 Windows, `~/.clawd-buddy/` on Linux). The path is intentionally
@@ -125,13 +147,10 @@ separate from `config.json` — settings sit in the platform config dir,
 **runtime data sits in the home directory** where it's easy to back up
 or sync via dotfile management.
 
-The **About → Reminders** tab shows:
-
-- **`3 cups today`** (bold headline, with singular/plural handling)
-- **`Recent days: 6 · 5 · 7 · 4 · 5 · 6 · 3`** (last 7 days, newest first)
-
-Both lines tick live on the same 1 Hz refresh as the countdown, and
-update immediately when you click the **I drank water now** button.
+The settings window's **Reminders** page shows **3 cups today** in
+large type, with a bar chart of the days before it (the last seven,
+today highlighted) and when the next reminder is due. It updates while
+open, and straight away when you click **I drank water**.
 
 Crossing local midnight closes out the in-progress day into the recent
 list and resets the count to zero. Empty days (zero acks) are skipped
@@ -409,12 +428,16 @@ clawd-buddy --pomodoro W/B   Start a pomodoro cycle on the running buddy.
                              Celebrates at break, waves back to work,
                              repeats until stopped.
 clawd-buddy --pomodoro-stop  End the running buddy's pomodoro cycle.
+clawd-buddy --settings [P]   Open the running buddy's settings window,
+                             optionally on page P (buddy, sound,
+                             reminders, focus, about).
 clawd-buddy --http-port N    (launch flag) Also accept signals over HTTP
                              on 127.0.0.1:N — POST /signal mirrors the
                              TCP protocol, GET /status mirrors --status.
 clawd-buddy --http-token T   (launch flag) Require "Authorization:
                              Bearer T" on every HTTP request. Without a
-                             token, the HTTP quit action is rejected.
+                             token, the HTTP quit and settings actions
+                             are rejected.
 clawd-buddy --workspace L    Attach workspace label L to the outgoing
                              signal (one-letter badge above the buddy
                              when several workspaces are active).
@@ -445,6 +468,7 @@ clawd-buddy --help           Show help
 | Input | Action |
 | --- | --- |
 | **Drag** | Click the buddy itself and drag to reposition. It reaches the very top and sides of the screen: where the window manager stops its window, the buddy keeps sliding inside it. Clicks around the buddy go through to whatever is behind it |
+| **Right-click** | Open the settings window |
 | **Space** | Trigger a test celebration (sessions that are working keep thinking afterwards) |
 | **Ctrl+1** | Size S, 1× (default) |
 | **Ctrl+2** | Size M, 1.25× |
@@ -496,7 +520,8 @@ src/clawd_buddy/
 │   ├── themes.py   # 8 color theme registry
 │   ├── sound.py    # procedural PCM sound-pack generators
 │   ├── drawing.py  # BuddyRenderer: buddy, status pill, bubble, confetti
-│   ├── about.py    # About dialog + shared buddy icon
+│   ├── about.py    # settings & About window + shared buddy icon
+│   ├── tkkit.py    # antialiased tkinter widgets for that window
 │   ├── tray.py     # pystray icon + right-click menu
 │   └── sni.py      # Linux tray backend: StatusNotifierItem + DBusMenu over D-Bus
 └── platform/
@@ -533,6 +558,9 @@ the thinking animation either way.
 `celebrate` with a `session_id` ends only that session. A `celebrate`
 without one ends every session (a session that never stops is dropped
 after 10 minutes without a signal).
+
+`{"action": "settings", "page": "focus"}` opens the settings window
+(on a page, if given), which is what `clawd-buddy --settings` sends.
 
 The `status` action is the only one that elicits a response — the
 buddy writes a JSON snapshot back on the same socket before closing:
@@ -645,12 +673,12 @@ The buddy adds a system tray icon with a right-click menu:
   - **Volume** — discrete steps `0%` / `25%` / `50%` / `75%` / `100%`. Selecting a step previews the celebrate sound at the new level.
   - **Quiet Hours** — `Off` or a preset night window (e.g. `23:00 – 08:00`). Inside the window all notification sounds are muted; animations still play.
 - **Reduce Motion** — accessibility toggle. When checked, the buddy stops hopping, bobbing, swinging limbs, and spawning confetti; the status pill and sounds remain.
-- **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, quiet hours) lives in **About… → Reminders**.
+- **Water Reminder** — toggle the water-drinking reminder. Detailed config (interval, sound, overnight pause) lives in the settings window's **Reminders** page.
 - **I drank water** — *appears only while a reminder is firing*. Same effect as pressing Space when the alarm is active: dismiss the current alarm. The next scheduled slot still fires on time.
 - **Stop Pomodoro** — *appears only while a pomodoro cycle is running*. Ends the cycle (same as `clawd-buddy --pomodoro-stop`).
 - **Workspace Badge** — toggle the multi-session workspace badge (default on; it only renders once a second workspace signals anyway). Recording continues while hidden, so re-enabling shows current data.
 - **Clawd Buddy vX.Y.Z** — informational version label (disabled)
-- **About…** — open a tabbed dialog: **About** (version / repo / author) and **Reminders** (edit interval, sound, and quiet hours; live countdown; "Drank now" button).
+- **Settings & About…** — open the [settings window](#settings-window), which has everything in this menu and more (also: right-click the buddy).
 - **Quit** — close the buddy
 
 On Linux the menu is drawn by your panel itself (GNOME, KDE, Xfce,
@@ -858,6 +886,9 @@ desktop hosts StatusNotifierItem icons:
   `snixembed`).
 - **You set `PYSTRAY_BACKEND`**: the buddy then leaves tray handling to
   pystray. Unset it to get the D-Bus menu back.
+
+Without a tray menu you can still reach every setting: right-click the
+buddy, or run `clawd-buddy --settings`.
 
 ## Disclaimer
 
