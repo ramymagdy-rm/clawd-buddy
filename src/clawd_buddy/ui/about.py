@@ -695,26 +695,7 @@ class ControlCenter:
             ctrl, kit, [(n, st.SCALE_LABELS[n]) for n in st.SCALE_PRESETS],
             lambda: st.scale_preset, self._set_size)
         c["size"].pack()
-        from .themes import (CHARACTER_THEMES, CLASSIC_THEMES,
-                             swatch_colors, theme_label)
-        ctrl, _ = self._row(look, "Theme", stacked=True)
-
-        def swatches(names):
-            items = []
-            for name in names:
-                fill, accent = swatch_colors(name)
-                items.append((name, theme_label(name), _rgb_hex(fill),
-                              _rgb_hex(accent)))
-            w = k.Swatches(ctrl, kit, items, lambda: st.theme_name,
-                           self._set_theme)
-            w.pack(anchor="w")
-            return w
-        # Two rows: the classic palettes, then the characters (their
-        # selection ring shows only in the row that holds the theme).
-        c["theme"] = swatches(CLASSIC_THEMES)
-        self._label(ctrl, "Characters", font=kit.f_small,
-                    fg=p["muted"]).pack(anchor="w", pady=(kit.px(6), kit.px(2)))
-        c["theme_characters"] = swatches(CHARACTER_THEMES)
+        self._build_theme_picker(look)
         ctrl, _ = self._row(look, "Reduce motion",
                             "Calmer animations, no confetti")
         c["reduce_motion"] = k.Toggle(ctrl, kit, lambda: st.reduce_motion,
@@ -735,6 +716,57 @@ class ControlCenter:
             c["startup"] = k.Toggle(ctrl, kit, self._startup_get,
                                     self._startup_set)
             c["startup"].pack()
+
+    def _build_theme_picker(self, card):
+        """Theme row: a Classic / Characters / Princesses / Animals
+        switch over a grid of colour dots for that group. Every grid is
+        the same size, so switching doesn't make the window jump."""
+        from .themes import (THEME_GROUPS, swatch_colors, theme_group,
+                             theme_label)
+        tk, k, kit, st, c = self.tk, self.k, self.kit, self.state, self.controls
+        ctrl, _ = self._row(card, "Theme", stacked=True)
+        cols = 8
+        cell = k.swatch_cell(kit, [theme_label(n) for _key, _t, names
+                                   in THEME_GROUPS for n in names])
+        rows = max(-(-len(names) // cols) for _k, _t, names in THEME_GROUPS)
+        grids = tk.Frame(ctrl, bg=self.p["card"])
+        frames = {}
+        for key, _title, names in THEME_GROUPS:
+            items = []
+            for name in names:
+                fill, accent = swatch_colors(name)
+                items.append((name, theme_label(name), _rgb_hex(fill),
+                              _rgb_hex(accent)))
+            frames[key] = k.Swatches(grids, kit, items, lambda: st.theme_name,
+                                     self._set_theme, columns=cols,
+                                     rows=rows, cell=cell)
+            c["theme" if key == "classic" else f"theme_{key}"] = frames[key]
+        shown = {"group": theme_group(st.theme_name),
+                 "theme": st.theme_name}
+
+        def show(key):
+            shown["group"] = key
+            for name, f in frames.items():
+                if name == key:
+                    f.pack(anchor="w")
+                else:
+                    f.pack_forget()
+        c["theme_group"] = k.Segmented(
+            ctrl, kit, [(key, title) for key, title, _n in THEME_GROUPS],
+            lambda: shown["group"], show)
+        c["theme_group"].pack(anchor="w", pady=(0, kit.px(12)))
+        grids.pack(anchor="w")
+        show(shown["group"])
+
+        def follow():
+            # A theme picked elsewhere (the tray) brings its group up.
+            if st.theme_name != shown["theme"]:
+                shown["theme"] = st.theme_name
+                group = theme_group(st.theme_name)
+                if group != shown["group"]:
+                    show(group)
+                    c["theme_group"].refresh()
+        self._live(follow)
 
     def _draw_chips(self, canvas, labels):
         from ..state import workspace_badge_color

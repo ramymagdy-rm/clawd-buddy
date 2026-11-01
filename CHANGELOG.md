@@ -47,6 +47,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   window, and work with `--theme`. They're fan-made tributes, not
   affiliated with the characters' owners.
 
+- **More characters, princesses and animals (38 themes in all).** New
+  characters: **Minion** (goggles and overalls), **Wall-E** (binocular
+  eyes), **Superman** (cape and S shield), **Stitch** (huge ears),
+  **Kirby**, **Buzz** (purple hood, green panels) and **Deadpool** (eye
+  patches). Princesses, with a face, their hair and their gown:
+  **Elsa** (a braid), **Ariel**, **Belle**, **Cinderella** (a headband),
+  **Snow White** (a bob and a bow), **Jasmine** and **Rapunzel** (hair
+  that pools on the floor). Animals: **Panda**, **Fox**, **Cat**,
+  **Tiger**, **Penguin** (a beak), **Frog**, **Bunny** and **Lion** (a
+  mane). The settings window switches between Classic, Characters,
+  Princesses and Animals instead of listing every theme in a row, and
+  the tray's Theme menu has a submenu for each group.
+
 - **A settings window that controls everything.** The old About dialog
   is now a modern window with a sidebar and five pages. **Buddy** shows
   what the buddy is doing (a chip per working workspace) and has

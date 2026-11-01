@@ -605,6 +605,14 @@ class BuddyRenderer:
         if pen.soft:
             self._draw_shadow(pen, cx + pose["sway"] * 0.5, lift)
             self._draw_glow(pen, mode, t, cx, body_y + bh / 2, reduced)
+        # Costume parts behind the character: a cape, long hair, a mane.
+        if cos.get("cape"):
+            _draw_cape(pen, cos["cape"], body_x, body_y, bw, feet_y)
+        if cos.get("hair") and cos.get("hair_style", "spiky") != "spiky":
+            _draw_hair_back(pen, cos["hair"], cos["hair_style"],
+                            body_x, body_y, bw, bh)
+        if cos.get("mane"):
+            _draw_mane(pen, cos["mane"], body_x, body_y, bw, bh)
         self._draw_feet(pen, th, cx + pose["sway"], feet_y)
         self._draw_arms(pen, th, body_x, body_y, bw, bh, pose)
         if cos.get("ears"):
@@ -757,9 +765,9 @@ class BuddyRenderer:
         if cos.get("traffic", True):
             for i, c in enumerate(_TRAFFIC):
                 pen.circle(c, bx + 13 + i * 6.5, by + 9.5, 1.9)
-        if cos.get("hair"):
+        if cos.get("hair") and cos.get("hair_style", "spiky") == "spiky":
             _draw_hair(pen, cos["hair"], bx, by, bw)
-        if cos.get("emblem"):
+        if cos.get("emblem") and not _hair_over_face(cos):
             _draw_emblem(pen, cos["emblem"], th, bx + bw / 2, by + 10)
 
     def _draw_face(self, pen, th, pal, bx, by, bw, bh, pose, mode, t, blink,
@@ -770,11 +778,33 @@ class BuddyRenderer:
         pen.rrect(th["screen_bg"], sx, sy, sw, sh, 13)
         if cos.get("web"):
             _draw_web(pen, cos["web"], sx, sy, sw, sh)
+        if _hair_over_face(cos):
+            # Drawn over the top of the face, so the fringe sits on it.
+            r = BODY_R * min(bw / BODY_W, bh / BODY_H)
+            _draw_hair_cap(pen, cos["hair"], cos["hair_style"],
+                           bx, by, bw, bh, r)
+            if cos.get("headband"):
+                _draw_headband(pen, cos["headband"], bx, by, bw, bh, r)
+            if cos.get("emblem"):
+                _draw_emblem(pen, cos["emblem"], th, bx + bw / 2, by + 10)
 
         fc = pal["face"]
         cx = sx + sw / 2
         ey = sy + sh * 0.45 + pose["look_y"]
         lx = pose["look_x"]
+
+        # Goggles and eye patches sit still on the face; the eyes look
+        # around inside them.
+        gy = sy + sh * 0.45
+        if cos.get("goggles"):
+            r = BODY_R * min(bw / BODY_W, bh / BODY_H)
+            _draw_goggles(pen, cos["goggles"], (bx, by, bw, bh, r), cx, gy)
+        eye_c, sparkle = fc, pal["sparkle"]
+        if cos.get("mask"):
+            _draw_mask(pen, cos["mask"], cx, gy)
+            eye_c, sparkle = cos.get("eye", fc), cos["mask"]
+        if cos.get("hair_style") == "braid":
+            _draw_braid(pen, cos["hair"], bx, by, bw, bh)
 
         expr = {"celebrating": "happy", "greeting": "happy",
                 "waving": "wide"}.get(mode, "open")
@@ -791,27 +821,36 @@ class BuddyRenderer:
         for dx in (-13, 13):
             ex = cx + dx + lx
             if expr == "happy" and not swap_blink:
-                pen.polyline(fc, [(ex - 5, ey + 2), (ex, ey - 3),
-                                  (ex + 5, ey + 2)], 3.2)
+                pen.polyline(eye_c, [(ex - 5, ey + 2), (ex, ey - 3),
+                                     (ex + 5, ey + 2)], 3.2)
             elif expr == "wide":
                 r = 6.6 * max(openness, 0.2)
-                pen.ellipse(fc, ex - 6.6, ey - r, 13.2, 2 * r)
+                pen.ellipse(eye_c, ex - 6.6, ey - r, 13.2, 2 * r)
                 if openness > 0.5:
-                    pen.circle(pal["sparkle"], ex - 2.2, ey - 2.4, 2.0)
+                    pen.circle(sparkle, ex - 2.2, ey - 2.4, 2.0)
             else:
                 h = max(3.0, 14 * openness)
-                pen.rrect(fc, ex - 4.6, ey - h / 2, 9.2, h, 4.6)
+                pen.rrect(eye_c, ex - 4.6, ey - h / 2, 9.2, h, 4.6)
                 if openness > 0.5:
-                    pen.circle(pal["sparkle"], ex + 1.3, ey - h / 2 + 3.4, 1.7)
+                    pen.circle(sparkle, ex + 1.3, ey - h / 2 + 3.4, 1.7)
 
         # Blush under the eyes (pre-mixed, so no alpha on the frame).
         blush = cos.get("blush", pal["blush"])
-        for dx in (-23, 23):
-            pen.ellipse(blush, cx + dx + lx * 0.5 - 4.5, ey + 6, 9, 4.5)
+        if blush is not None:
+            for dx in (-23, 23):
+                pen.ellipse(blush, cx + dx + lx * 0.5 - 4.5, ey + 6, 9, 4.5)
 
         my = sy + sh * 0.8 + pose["look_y"] * 0.4
         mx = cx + lx * 0.6
-        if mode == "celebrating":
+        ny = sy + sh * 0.64 + pose["look_y"] * 0.5
+        if cos.get("whiskers"):
+            _draw_whiskers(pen, cos["whiskers"], mx, ny)
+        if cos.get("nose"):
+            _draw_nose(pen, cos["nose"], mx, ny)
+        if cos.get("beak"):
+            _draw_beak(pen, cos["beak"], mx, my,
+                       mode in ("celebrating", "greeting"))
+        elif mode == "celebrating":
             pts = [(mx - 6 + 12 * i / 8, my - 2 + 6 * math.sin(math.pi * i / 8))
                    for i in range(9)]
             pen.polygon(pal["happy"], pts)
@@ -971,16 +1010,36 @@ def _draw_ears(pen, cos, bx, by, bw):
         pen.polygon(color, [(bx + bw * 0.44, by + 8), (bx + bw * 0.58, by - 9),
                             (bx + bw * 0.66, by - 7), (bx + bw * 0.78, by + 6)])
         return
+    inner = cos.get("ear_inner")
     for side in (-1, 1):
         def at(f, y):
             return (bx + bw / 2 + side * (f - 0.5) * -bw, y)
-        if kind == "bat":
+        if kind == "round":
+            x, y = at(0.17, by + 3)
+            pen.circle(color, x, y, 9.5)
+            if inner:
+                pen.circle(inner, x, y, 5.2)
+        elif kind == "long":
+            (x0, y0), (x1, y1) = at(0.33, by + 8), at(0.25, by - 22)
+            pen.capsule(color, x0, y0, x1, y1, 12)
+            if inner:
+                pen.capsule(inner, x0, y0 - 2, x1 + side * 0.3, y1 + 4, 5.5)
+        elif kind == "wide":
+            pts = [at(0.10, by + 18), at(-0.30, by - 8), at(-0.12, by - 2),
+                   at(0.38, by + 4)]
+            pen.polygon(color, pts)
+            if inner:
+                pen.polygon(inner, _shrink(pts, 0.55, (0, 1.5)))
+        elif kind == "bat":
             pen.polygon(color, [at(0.13, by + 12), at(0.19, by - 12),
                                 at(0.40, by + 5)])
         elif kind == "pointy":
             base_a, base_b = at(0.17, by + 10), at(0.42, by + 4)
             tip = at(-0.04, by - 13)
             pen.polygon(color, [base_a, tip, base_b])
+            if inner:
+                pen.polygon(inner, _shrink([base_a, tip, base_b], 0.5,
+                                           (0, 2.5)))
             tip_color = cos.get("ear_tip")
             if tip_color:
                 k = 0.6
@@ -1035,12 +1094,205 @@ def _draw_emblem(pen, kind, th, x, y):
         pen.circle((190, 245, 255), x, y, 4.4)
         pen.circle((110, 222, 255), x, y, 3.0)
         pen.circle((255, 255, 255), x, y, 1.5)
+    elif kind == "super":
+        red, gold = (200, 30, 40), (255, 214, 50)
+        shield = [(x - 7.5, y - 4.5), (x + 7.5, y - 4.5), (x + 9, y - 1.5),
+                  (x, y + 6.5), (x - 9, y - 1.5)]
+        pen.polygon(red, shield)
+        pen.polygon(gold, _shrink(shield, 0.74, (0, -0.2)))
+        pen.polyline(red, [(x + 2.6, y - 2.6), (x - 1.8, y - 2.6),
+                           (x - 2.2, y - 0.9), (x + 1.8, y + 0.2),
+                           (x + 1.4, y + 1.9), (x - 2.4, y + 1.9)], 1.3)
+    elif kind == "bow":
+        x, y = x + 15, y - 9
+        red = (200, 30, 40)
+        pen.polygon(red, [(x, y), (x - 7.5, y - 4.5), (x - 7.5, y + 4.5)])
+        pen.polygon(red, [(x, y), (x + 7.5, y - 4.5), (x + 7.5, y + 4.5)])
+        pen.circle(_mix(red, (0, 0, 0), 0.25), x, y, 2.2)
     elif kind == "star":
         pen.circle((196, 30, 40), x, y, 5.8)
         pen.circle((245, 245, 250), x, y, 4.5)
         pen.circle((196, 30, 40), x, y, 3.5)
         pen.circle(th["body_outer"], x, y, 2.6)
         pen.polygon((255, 255, 255), _star(x, y, 2.5, 1.0))
+
+
+def _shrink(pts, k, shift=(0, 0)):
+    """`pts` scaled by `k` about their centroid, then moved by `shift`."""
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    return [(cx + (x - cx) * k + shift[0], cy + (y - cy) * k + shift[1])
+            for x, y in pts]
+
+
+def _ellipse_pts(cx, cy, rx, ry, angle, n=20):
+    ca, sa = math.cos(angle), math.sin(angle)
+    pts = []
+    for i in range(n):
+        a = 2 * math.pi * i / n
+        x, y = rx * math.cos(a), ry * math.sin(a)
+        pts.append((cx + x * ca - y * sa, cy + x * sa + y * ca))
+    return pts
+
+
+_HAIR_SIDE = {"long": 0.62, "very_long": 0.62, "bob": 0.5, "braid": 0.3}
+
+
+def _hair_over_face(cos):
+    """Long hair, a bob or a braid: hair framing the face."""
+    return bool(cos.get("hair")) and cos.get("hair_style", "spiky") != "spiky"
+
+
+def _draw_hair_cap(pen, color, style, bx, by, bw, bh, r):
+    """Hair over the head: a fringe down to the face (swept back for a
+    braid) and locks down both sides of it."""
+    head = (bx - 1.2, by - 1.2, bw + 2.4, bh + 2.4, r + 1.2)
+    cx = bx + bw / 2
+    # The face starts 16 below the head top; a fringe reaches just past
+    # it, and a braid's swept-back hair just meets it.
+    fringe, part_depth = (16.5, 0) if style == "braid" else (18.5, 2.5)
+    side = by + bh * _HAIR_SIDE.get(style, 0.6)
+    def fringe_y(x):
+        f = abs(x - cx) / (bw / 2)
+        # Side-swept: the parting sits left of centre.
+        part = math.exp(-((x - (cx - 9)) / 4.5) ** 2) * part_depth
+        # Curving down at the sides far enough to cover the face's
+        # rounded top corners, so no gown shows between hair and face.
+        return by + fringe + 7 * (f / 0.8) ** 2 - part
+
+    # The side locks start at a fixed fraction of the width. That edge
+    # gets its own points (a clean vertical step) instead of falling
+    # between two samples, where it would slide a whole sample sideways
+    # whenever breathing moved it past one.
+    n = 28
+    lock_l, lock_r = cx - 0.8 * bw / 2, cx + 0.8 * bw / 2
+    xs = sorted({head[0] + head[2] * (i / n) for i in range(n + 1)}
+                | {lock_l, lock_r})
+    top, bottom = [], []
+    for x in xs:
+        span = _rrect_span(x, *head)
+        if span is None:
+            continue
+        top.append((x, span[0]))
+        if x == lock_l:
+            ys = (side, fringe_y(x))
+        elif x == lock_r:
+            ys = (fringe_y(x), side)
+        else:
+            ys = (side if x < lock_l or x > lock_r else fringe_y(x),)
+        bottom.extend((x, min(y, span[1])) for y in ys)
+    pen.polygon(color, top + bottom[::-1])
+
+
+def _draw_hair_back(pen, color, style, bx, by, bw, bh):
+    """Long hair hanging behind the body, showing at its sides."""
+    length = {"long": bh * 0.95, "very_long": bh + 4,
+              "bob": bh * 0.56}.get(style)
+    if not length:
+        return
+    for x in (bx - 5, bx + bw - 13):
+        pen.rrect(color, x, by + 4, 18, length, 8)
+    if style == "very_long":
+        # So long it pools on the floor.
+        pen.ellipse(color, bx + bw - 12, by + bh, 30, 9)
+        pen.ellipse(color, bx - 14, by + bh + 1, 22, 8)
+
+
+def _draw_braid(pen, color, bx, by, bw, bh):
+    """A braid over the shoulder, down the right side of the body."""
+    dark = _mix(color, (60, 50, 40), 0.25)
+    x, y = bx + bw - 9, by + 14
+    for i in range(7):
+        wob = 1.6 if i % 2 else -1.6
+        pen.ellipse(dark, x + wob - 5.2, y - 4.2, 10.4, 8.6)
+        pen.ellipse(color, x + wob - 4.4, y - 3.4, 8.8, 7)
+        x += 0.9
+        y += 7.6
+    pen.capsule(dark, x - 1, y - 4, x + 1, y + 2, 2.4)
+
+
+def _draw_headband(pen, color, bx, by, bw, bh, r):
+    head = (bx - 1.2, by - 1.2, bw + 2.4, bh + 2.4, r + 1.2)
+    pts = []
+    for i in range(17):
+        x = bx + 7 + (bw - 14) * i / 16
+        pts.append((x, _rrect_span(x, *head)[0] + 6.5))
+    pen.polyline(color, pts, 3.2)
+
+
+def _draw_cape(pen, color, bx, by, bw, feet_y):
+    """A cape behind the body, flaring out to the ground."""
+    pts = [(bx + 10, by + 14), (bx + bw - 10, by + 14),
+           (bx + bw + 11, feet_y + 2)]
+    for i in range(1, 6):
+        x = bx + bw + 11 - (bw + 22) * i / 6
+        pts.append((x, feet_y + (4 if i % 2 else 1)))
+    pts.append((bx - 11, feet_y + 2))
+    pen.polygon(color, pts)
+
+
+def _draw_mane(pen, color, bx, by, bw, bh):
+    """A shaggy mane around the head."""
+    cx, cy = bx + bw / 2, by + bh * 0.48
+    rx, ry = bw / 2 + 10, bh * 0.5 + 12
+    pts = []
+    for i in range(32):
+        a = 2 * math.pi * i / 32
+        k = 1.0 if i % 2 == 0 else 0.86
+        pts.append((cx + rx * k * math.cos(a), cy + ry * k * math.sin(a)))
+    pen.polygon(color, pts)
+
+
+def _draw_goggles(pen, g, body, cx, gy):
+    """Goggles around both eyes (Minion), or binoculars (Wall-E)."""
+    if g.get("strap"):
+        poly = _clipped_band(body, body[0], body[0] + body[2],
+                             gy - 3.5, gy + 3.5, steps=20)
+        if poly:
+            pen.polygon(g["strap"], poly)
+    for dx in (-13, 13):
+        x = cx + dx
+        if g.get("bridge"):
+            pen.rrect(g["rim"], x - 12.5, gy - 10.5, 25, 21, 8)
+            pen.rrect(g["lens"], x - 10, gy - 8, 20, 16, 6)
+        else:
+            pen.circle(g["rim"], x, gy, 11.5)
+            pen.circle(g["lens"], x, gy, 9)
+    if g.get("bridge"):
+        pen.rrect(g["rim"], cx - 4, gy - 3, 8, 6, 2)
+
+
+def _draw_mask(pen, color, cx, gy):
+    """A patch around each eye (panda, Deadpool), drooping outwards."""
+    for side in (-1, 1):
+        pen.polygon(color, _ellipse_pts(cx + side * 13.5, gy + 1, 10, 8,
+                                        side * 0.5))
+
+
+def _draw_nose(pen, color, x, y):
+    pen.ellipse(color, x - 3.2, y - 2.4, 6.4, 3.2)
+    pen.polygon(color, [(x - 3, y - 1.2), (x + 3, y - 1.2), (x, y + 2)])
+
+
+def _draw_whiskers(pen, color, x, y):
+    for side in (-1, 1):
+        for k in (-1, 0, 1):
+            pen.polyline(color, [(x + side * 15, y + k * 1.8),
+                                 (x + side * 30, y + k * 4.2 - 1)], 0.9)
+
+
+def _draw_beak(pen, color, x, y, open_):
+    edge = _mix(color, (0, 0, 0), 0.22)
+    if open_:
+        pen.polygon(edge, [(x - 5.5, y - 4), (x + 5.5, y - 4), (x, y)])
+        pen.polygon(color, [(x - 4.5, y - 3.5), (x + 4.5, y - 3.5),
+                            (x, y - 0.6)])
+        pen.polygon(color, [(x - 3.5, y + 0.8), (x + 3.5, y + 0.8),
+                            (x, y + 3.8)])
+    else:
+        pen.polygon(edge, [(x - 5.5, y - 3), (x + 5.5, y - 3), (x, y + 3)])
+        pen.polygon(color, [(x - 4.5, y - 2.5), (x + 4.5, y - 2.5),
+                            (x, y + 2)])
 
 
 def _draw_web(pen, color, sx, sy, sw, sh):

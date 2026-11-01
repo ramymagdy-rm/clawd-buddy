@@ -80,8 +80,13 @@ class TestHelpers:
 
 
 # ── Character themes and costumes ────────────────────────────────────
-_COSTUME_KEYS = {"traffic", "bands", "ears", "ear", "ear_tip", "hair",
-                 "emblem", "web", "blush", "accent"}
+_COSTUME_KEYS = {"traffic", "bands", "ears", "ear", "ear_tip", "ear_inner",
+                 "hair", "hair_style", "headband", "mane", "cape", "emblem",
+                 "web", "goggles", "mask", "eye", "nose", "whiskers", "beak",
+                 "blush", "accent"}
+_COLOUR_KEYS = ("ear", "ear_tip", "ear_inner", "hair", "headband", "mane",
+                "cape", "web", "mask", "eye", "nose", "whiskers", "beak",
+                "accent")
 
 
 def _is_rgb(c):
@@ -96,8 +101,28 @@ class TestCharacterThemes:
 
     def test_the_characters_are_there(self):
         for name in ("nemo", "dory", "batman", "ironman", "hulk",
-                     "spiderman", "captain", "pikachu"):
-            assert name in themes_mod.CHARACTER_THEMES
+                     "spiderman", "captain", "pikachu", "minion", "walle",
+                     "superman", "stitch", "kirby", "buzz", "deadpool"):
+            assert name in themes_mod.HERO_THEMES
+        for name in ("elsa", "ariel", "belle", "cinderella", "snowwhite",
+                     "jasmine", "rapunzel"):
+            assert name in themes_mod.PRINCESS_THEMES
+        for name in ("panda", "fox", "cat", "tiger", "penguin", "frog",
+                     "bunny", "lion"):
+            assert name in themes_mod.ANIMAL_THEMES
+
+    def test_groups_split_every_theme_once(self):
+        grouped = [n for _k, _t, names in themes_mod.THEME_GROUPS
+                   for n in names]
+        assert sorted(grouped) == sorted(themes_mod.THEME_NAMES)
+        assert len(grouped) == len(set(grouped))
+
+    def test_theme_group(self):
+        assert themes_mod.theme_group("nord") == "classic"
+        assert themes_mod.theme_group("batman") == "characters"
+        assert themes_mod.theme_group("elsa") == "princesses"
+        assert themes_mod.theme_group("fox") == "animals"
+        assert themes_mod.theme_group("nope") == "classic"
 
     def test_every_character_has_a_costume(self):
         for name in themes_mod.CHARACTER_THEMES:
@@ -111,6 +136,8 @@ class TestCharacterThemes:
         assert themes_mod.theme_label("ironman") == "Iron Man"
         assert themes_mod.theme_label("spiderman") == "Spider-Man"
         assert themes_mod.theme_label("dracula") == "Dracula"
+        assert themes_mod.theme_label("walle") == "Wall-E"
+        assert themes_mod.theme_label("snowwhite") == "Snow White"
 
     @pytest.mark.parametrize("name", list(themes_mod.THEMES))
     def test_swatch_colors_are_rgb(self, name):
@@ -124,11 +151,23 @@ class TestCostumes:
         assert name in themes_mod.THEMES
         c = themes_mod.COSTUMES[name]
         assert set(c) <= _COSTUME_KEYS, set(c) - _COSTUME_KEYS
-        assert c.get("ears") in (None, "bat", "pointy", "fin")
-        assert c.get("emblem") in (None, "bat", "reactor", "star")
-        for key in ("ear", "ear_tip", "hair", "web", "blush", "accent"):
+        assert c.get("ears") in (None, "bat", "pointy", "fin", "round",
+                                 "long", "wide")
+        assert c.get("emblem") in (None, "bat", "reactor", "star", "super",
+                                   "bow")
+        assert c.get("hair_style", "spiky") in (
+            "spiky", "long", "very_long", "bob", "braid")
+        if "hair_style" in c or "headband" in c:
+            assert "hair" in c, name
+        for key in _COLOUR_KEYS:
             if key in c:
                 assert _is_rgb(c[key]), (name, key)
+        assert c.get("blush", (0, 0, 0)) is None or _is_rgb(
+            c.get("blush", (0, 0, 0)))
+        g = c.get("goggles")
+        if g is not None:
+            assert _is_rgb(g["rim"]) and _is_rgb(g["lens"])
+            assert g.get("strap") is None or _is_rgb(g["strap"])
 
     @pytest.mark.parametrize("name", list(themes_mod.COSTUMES))
     def test_bands_are_fractions_and_colours(self, name):
