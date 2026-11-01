@@ -24,6 +24,7 @@ from ..config import (
     save_quiet_hours_pref,
     save_reduce_motion_pref,
     save_reminder_enabled_pref,
+    save_scale_pref,
     save_sound_pack_pref,
     save_theme_pref,
     save_volume_pref,
@@ -126,6 +127,33 @@ def _create_tray_impl(state):
 
     theme_submenu = pystray.Menu(*[
         _theme_item(name) for name in THEME_NAMES
+    ])
+
+    # Size submenu — radio list of the size presets. The main loop
+    # resizes on its next frame (window calls stay on that thread).
+    def _make_size_action(preset):
+        def _action(_icon, _item):
+            state.set_scale(preset)
+            save_scale_pref(preset)
+        return _action
+
+    def _make_size_checker(preset):
+        def _checker(_item):
+            return state.scale_preset == preset
+        return _checker
+
+    def _size_label(preset):
+        scale = state.SCALE_PRESETS[preset]
+        return f"{state.SCALE_LABELS[preset]}  ({scale:g}\u00d7)"
+
+    size_submenu = pystray.Menu(*[
+        pystray.MenuItem(
+            _size_label(preset),
+            _make_size_action(preset),
+            checked=_make_size_checker(preset),
+            radio=True,
+        )
+        for preset in state.SCALE_PRESETS
     ])
 
     # Sound submenu — same factory pattern. Clicking a pack switches AND
@@ -281,6 +309,7 @@ def _create_tray_impl(state):
         pystray.MenuItem("Test Celebration", on_celebrate),
         pystray.MenuItem("Bring to Front", on_bring_to_front),
         pystray.MenuItem("Center on Screen", on_center),
+        pystray.MenuItem("Size", size_submenu),
         pystray.MenuItem("Theme", theme_submenu),
         pystray.MenuItem("Sound", sound_submenu),
         pystray.MenuItem(

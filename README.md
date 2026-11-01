@@ -267,7 +267,7 @@ theme, so the override sticks for next time too. First-run default is `dark`.
 | **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | Notification-area icon (pystray) | VBS in Startup folder |
 | **Linux (X11 / XWayland)** | Per-pixel alpha with a compositor (fully transparent background); themed background without one | `_NET_WM_STATE_ABOVE` | StatusNotifierItem over D-Bus (GNOME needs the AppIndicator extension, which Ubuntu enables by default) | `.desktop` in `~/.config/autostart/` |
 
-> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use `Ctrl+2/3/4` to enlarge it if you'd like it bigger.
+> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use the tray **Size** menu (or `Ctrl+2`…`Ctrl+6`) to enlarge it if you'd like it bigger.
 
 > **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px. When a compositing manager is running (GNOME, KDE, Xfce with compositing, picom…), the window uses a 32-bit ARGB visual, so the background is truly transparent. This sets `SDL_VIDEO_X11_WINDOW_VISUALID` and `SDL_FRAMEBUFFER_ACCELERATION=0` automatically.
 
@@ -446,10 +446,16 @@ clawd-buddy --help           Show help
 | --- | --- |
 | **Drag** | Click the buddy itself and drag to reposition. It reaches the very top and sides of the screen: where the window manager stops its window, the buddy keeps sliding inside it. Clicks around the buddy go through to whatever is behind it |
 | **Space** | Trigger a test celebration (sessions that are working keep thinking afterwards) |
-| **Ctrl+1** | Scale to 100% (default) |
-| **Ctrl+2** | Scale to 125% |
-| **Ctrl+3** | Scale to 150% |
-| **Ctrl+4** | Scale to 200% |
+| **Ctrl+1** | Size S, 1× (default) |
+| **Ctrl+2** | Size M, 1.25× |
+| **Ctrl+3** | Size L, 1.5× |
+| **Ctrl+4** | Size L+, 2× |
+| **Ctrl+5** | Size XL, 3× |
+| **Ctrl+6** | Size XXL, 4× |
+
+The same sizes are in the tray **Size** menu. The size you pick is
+remembered, and the buddy keeps its feet where they were when it grows
+or shrinks.
 | **Escape** | Quit the buddy |
 | **Tray icon** | Right-click the system tray icon for a menu — theme switcher lives here |
 
@@ -631,6 +637,7 @@ Only one buddy can run at a time. If you launch `clawd-buddy` while one is alrea
 The buddy adds a system tray icon with a right-click menu:
 
 - **Test Celebration** — trigger the celebrate animation
+- **Size** — S (1×), M (1.25×), L (1.5×), L+ (2×), XL (3×) or XXL (4×); same as Ctrl+1…6, remembered across restarts
 - **Bring to Front** — re-assert always-on-top (recovers z-order)
 - **Center on Screen** — move the buddy to the middle of the screen (recovers a dragged-away or off-screen window)
 - **Theme** — pick one of the 8 themes (current one is checked)

@@ -19,6 +19,7 @@ import sys
 import pygame
 
 from ..constants import TKEY, WIN_H, WIN_W
+from ..placement import area_at, clamp_into, overlaps_any
 from ..ui.themes import THEMES
 
 
@@ -68,13 +69,34 @@ def move_window(handle, x, y):
 
 def _get_screen_size():
     """Return (width, height) of the primary screen — kept private since
-    the only consumers are `raise_window` and `resize_window`."""
+    the only consumers are `raise_window`, `center_window` and
+    `resize_window`."""
     if sys.platform == "win32":
         return _impl._win_get_screen_size()
     if sys.platform == "linux":
+        # Not pygame.display.Info(): once a window exists, its current_w
+        # / current_h are the *window's* size, which sent every resize,
+        # Center on Screen and Bring to Front to the top-left corner.
+        try:
+            sizes = pygame.display.get_desktop_sizes()
+        except pygame.error:
+            sizes = []
+        if sizes:
+            return sizes[0]
         info = pygame.display.Info()
         return info.current_w, info.current_h
     return 1920, 1080
+
+
+def _screen_areas():
+    """Rectangles the window should stay on: the window manager's work
+    areas (one per monitor) when it publishes them, otherwise the
+    primary screen."""
+    areas = get_work_areas()
+    if areas:
+        return areas
+    scr_w, scr_h = _get_screen_size()
+    return [(0, 0, scr_w, scr_h)]
 
 
 def get_work_areas():
@@ -102,11 +124,8 @@ def raise_window(handle):
     """Force the window above other topmost peers, snapping it back
     on-screen if it has drifted off (e.g. monitor disconnected, dragged
     out of bounds)."""
-    wx, wy, ww, wh = get_window_rect(handle)
-    scr_w, scr_h = _get_screen_size()
-    off_screen = (wx + ww <= 0 or wy + wh <= 0
-                  or wx >= scr_w or wy >= scr_h)
-    if off_screen:
+    rect = get_window_rect(handle)
+    if not overlaps_any(rect, _screen_areas()):
         nx, ny = get_initial_position()
         move_window(handle, nx, ny)
 
@@ -184,17 +203,18 @@ def _compute_taskbar_anchored_position(scr_w, scr_h, bar_top, bar_valid):
 
 
 def center_window(handle):
-    """Move the window to the center of the primary screen.
+    """Move the window to the center of the screen it's on (its work
+    area, on Linux), or of the primary screen.
 
     Uses the window's *current* size (so it stays centered at whatever
     scale the user picked) and the same coordinate space as
     get_initial_position — after set_dpi_awareness that space is
-    physical pixels, so the math lines up on scaled displays too. Clamped
-    to non-negative in case the window is larger than the screen."""
-    _, _, ww, wh = get_window_rect(handle)
-    scr_w, scr_h = _get_screen_size()
-    x = max(0, (scr_w - ww) // 2)
-    y = max(0, (scr_h - wh) // 2)
+    physical pixels, so the math lines up on scaled displays too. Kept
+    at the area's top-left corner when the window is larger than it."""
+    wx, wy, ww, wh = get_window_rect(handle)
+    ax, ay, aw, ah = area_at(_screen_areas(), (wx + ww // 2, wy + wh // 2))
+    x = ax + max(0, (aw - ww) // 2)
+    y = ay + max(0, (ah - wh) // 2)
     move_window(handle, x, y)
 
 
@@ -219,19 +239,26 @@ def get_initial_position():
     return 0, 0
 
 
-def resize_window(handle, scale, topmost):
-    """Resize the pygame window, re-apply platform setup, and clamp
-    to screen."""
+def resize_window(handle, scale, topmost, anchor=(0.5, 1.0)):
+    """Resize the pygame window, re-apply platform setup, and keep it on
+    screen.
+
+    The window grows or shrinks around `anchor`, a point given as
+    fractions of the window's width and height (the buddy's feet, from
+    the caller), so the buddy stays where it was instead of the window
+    growing from its top-left corner."""
     new_w = int(WIN_W * scale)
     new_h = int(WIN_H * scale)
-    wx, wy, _, _ = get_window_rect(handle)
+    wx, wy, ow, oh = get_window_rect(handle)
+    ax, ay = wx + ow * anchor[0], wy + oh * anchor[1]
     screen = pygame.display.set_mode((new_w, new_h), pygame.NOFRAME)
     handle = get_window_handle()
     setup_window(handle, topmost)
-    scr_w, scr_h = _get_screen_size()
-    nx = max(0, min(wx, scr_w - new_w))
-    ny = max(0, min(wy, scr_h - new_h))
-    move_window(handle, nx, ny)
+    nx = int(round(ax - new_w * anchor[0]))
+    ny = int(round(ay - new_h * anchor[1]))
+    nx, ny = clamp_into((nx, ny, new_w, new_h), _screen_areas(),
+                        (int(ax), int(ay)))
+    move_window(handle, int(nx), int(ny))
     return screen, handle
 
 

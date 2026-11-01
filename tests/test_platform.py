@@ -264,10 +264,11 @@ class TestCenterWindow:
     move_window. Patch those and capture the move to assert the geometry
     without touching a real display."""
 
-    def _patch(self, monkeypatch, rect, screen):
+    def _patch(self, monkeypatch, rect, screen, areas=()):
         moved = {}
         monkeypatch.setattr(plat, "get_window_rect", lambda h: rect)
         monkeypatch.setattr(plat, "_get_screen_size", lambda: screen)
+        monkeypatch.setattr(plat, "get_work_areas", lambda: list(areas))
         monkeypatch.setattr(
             plat, "move_window", lambda h, x, y: moved.update(x=x, y=y))
         return moved
@@ -288,6 +289,102 @@ class TestCenterWindow:
         moved = self._patch(monkeypatch, (0, 0, 3000, 3000), (1920, 1200))
         plat.center_window(handle=1234)
         assert moved == {"x": 0, "y": 0}
+
+
+    def test_centers_in_the_work_area_it_is_on(self, monkeypatch):
+        # The two-monitor layout from the drag fix: laptop panel at the
+        # right, primary below its top bar and right of its dock.
+        areas = [(1920, 0, 1920, 1200), (67, 152, 1853, 1048)]
+        moved = self._patch(monkeypatch, (300, 600, 200, 260),
+                            (1920, 1080), areas)
+        plat.center_window(handle=1)
+        assert moved == {"x": 67 + (1853 - 200) // 2,
+                         "y": 152 + (1048 - 260) // 2}
+        moved = self._patch(monkeypatch, (2500, 300, 200, 260),
+                            (1920, 1080), areas)
+        plat.center_window(handle=1)
+        assert moved == {"x": 1920 + (1920 - 200) // 2,
+                         "y": (1200 - 260) // 2}
+
+
+class TestScreenSize:
+    def test_linux_ignores_the_window_size(self, monkeypatch):
+        # Regression: pygame.display.Info() reports the window's size
+        # once a window exists, which sent resizes, Center on Screen and
+        # Bring to Front to the top-left corner.
+        monkeypatch.setattr(plat.sys, "platform", "linux")
+        monkeypatch.setattr(plat.pygame.display, "get_desktop_sizes",
+                            lambda: [(1920, 1080), (1920, 1200)])
+        assert plat._get_screen_size() == (1920, 1080)
+
+
+class TestResizeWindow:
+    """resize_window keeps the buddy's feet in place."""
+
+    def _patch(self, monkeypatch, rect, areas):
+        moved = {}
+        monkeypatch.setattr(plat, "get_window_rect", lambda h: rect)
+        monkeypatch.setattr(plat, "get_work_areas", lambda: list(areas))
+        monkeypatch.setattr(plat, "get_window_handle", lambda: 7)
+        monkeypatch.setattr(plat, "setup_window", lambda h, top: None)
+        monkeypatch.setattr(plat.pygame.display, "set_mode",
+                            lambda size, flags=0: size)
+        monkeypatch.setattr(
+            plat, "move_window", lambda h, x, y: moved.update(x=x, y=y))
+        return moved
+
+    def test_grows_around_the_anchor(self, monkeypatch):
+        feet = (0.5, 214 / 260)
+        moved = self._patch(monkeypatch, (800, 600, 200, 260),
+                            [(0, 0, 1920, 1200)])
+        size, handle = plat.resize_window(1, 2.0, True, anchor=feet)
+        assert size == (400, 520) and handle == 7
+        # Feet were at (900, 814); still there at the new size.
+        assert moved["x"] + 400 * 0.5 == 900
+        assert moved["y"] + 520 * feet[1] == 814
+
+    def test_stays_on_its_monitor(self, monkeypatch):
+        areas = [(1920, 0, 1920, 1200), (67, 152, 1853, 1048)]
+        # Buddy on the laptop panel near the bottom: growing to XXL
+        # would push the window past the bottom, so it's lifted.
+        moved = self._patch(monkeypatch, (2800, 940, 200, 260), areas)
+        plat.resize_window(1, 4.0, True, anchor=(0.5, 214 / 260))
+        assert moved["y"] == 1200 - 1040
+        assert 1920 <= moved["x"] <= 3840 - 800
+
+    def test_not_sent_to_the_corner(self, monkeypatch):
+        moved = self._patch(monkeypatch, (860, 696, 200, 260),
+                            [(67, 152, 1853, 1048)])
+        plat.resize_window(1, 1.25, True)
+        assert (moved["x"], moved["y"]) != (67, 152)
+        assert moved == {"x": 835, "y": 631}
+
+
+class TestRaiseWindow:
+    def test_on_screen_window_stays_put(self, monkeypatch):
+        moved = {}
+        monkeypatch.setattr(plat, "get_window_rect",
+                            lambda h: (860, 696, 200, 260))
+        monkeypatch.setattr(plat, "get_work_areas",
+                            lambda: [(67, 152, 1853, 1048)])
+        monkeypatch.setattr(plat, "move_window",
+                            lambda h, x, y: moved.update(x=x, y=y))
+        monkeypatch.setattr(plat.sys, "platform", "haiku")
+        plat.raise_window(1)
+        assert moved == {}
+
+    def test_off_screen_window_comes_back(self, monkeypatch):
+        moved = {}
+        monkeypatch.setattr(plat, "get_window_rect",
+                            lambda h: (5000, 5000, 200, 260))
+        monkeypatch.setattr(plat, "get_work_areas",
+                            lambda: [(67, 152, 1853, 1048)])
+        monkeypatch.setattr(plat, "get_initial_position", lambda: (10, 20))
+        monkeypatch.setattr(plat, "move_window",
+                            lambda h, x, y: moved.update(x=x, y=y))
+        monkeypatch.setattr(plat.sys, "platform", "haiku")
+        plat.raise_window(1)
+        assert moved == {"x": 10, "y": 20}
 
 
 class TestSetDpiAwareness:

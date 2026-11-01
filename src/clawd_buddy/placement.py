@@ -34,6 +34,18 @@ def covered(rect, areas):
     return sum(_overlap(rect, a) for a in areas) >= need
 
 
+def overlaps_any(rect, areas):
+    """True when any part of `rect` is on one of `areas`."""
+    return any(_overlap(rect, a) for a in areas)
+
+
+def area_at(areas, point):
+    """The area under `point`, or the nearest one."""
+    inside = [a for a in areas if _contains(a, point)]
+    return inside[0] if inside else min(
+        areas, key=lambda a: _distance(a, point))
+
+
 def _contains(area, point):
     x, y, w, h = area
     return x <= point[0] < x + w and y <= point[1] < y + h
@@ -58,9 +70,7 @@ def clamp_into(rect, areas, point):
     x, y, w, h = rect
     if not areas or covered(rect, areas):
         return x, y
-    inside = [a for a in areas if _contains(a, point)]
-    ax, ay, aw, ah = inside[0] if inside else min(
-        areas, key=lambda a: _distance(a, point))
+    ax, ay, aw, ah = area_at(areas, point)
     nx = ax if w >= aw else _clamp(x, ax, ax + aw - w)
     ny = ay if h >= ah else _clamp(y, ay, ay + ah - h)
     return nx, ny

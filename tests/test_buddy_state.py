@@ -1937,3 +1937,25 @@ class TestWindowPlacementRequests:
         state.center_on_screen()
         assert state._center_requested is True
         assert state._raise_requested is False
+
+
+# ── Size presets ─────────────────────────────────────────────────────
+class TestSizePresets:
+    def test_xl_and_xxl(self, state):
+        state.set_scale(5)
+        assert state.scale == 3.0 and state.scale_preset == 5
+        state.set_scale(6)
+        assert state.scale == 4.0 and state.scale_preset == 6
+
+    def test_every_preset_has_a_label(self, state):
+        assert set(state.SCALE_LABELS) == set(state.SCALE_PRESETS)
+
+    def test_unknown_preset_ignored(self, state):
+        state.set_scale(7)
+        assert state.scale == 1.0 and not state._scale_changed
+
+    def test_same_preset_is_not_a_resize(self, state):
+        state.set_scale(1)
+        assert not state._scale_changed
+        state.set_scale(2)
+        assert state._scale_changed
