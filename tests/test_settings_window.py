@@ -85,6 +85,7 @@ class TestFormatting:
 
     def test_short_path_uses_tilde(self, monkeypatch):
         monkeypatch.setenv("HOME", "/home/u")
+        monkeypatch.setenv("USERPROFILE", "/home/u")    # what Windows reads
         assert about._short_path("/home/u/.config/clawd-buddy") == \
             "~/.config/clawd-buddy"
 
