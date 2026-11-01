@@ -17,6 +17,7 @@ Supported actions (and the BuddyState method they invoke):
     celebrate      → state.trigger(session_id=…)   (a session's Stop)
     wave           → state.wave(session_id=…)
     raise          → state.bring_to_front()
+    settings       → state.open_settings(page=…)   (the settings window)
     quit           → sets state.should_quit
     prompt_start   → state.prompt_start(session_id=…)
     greet          → state.greet(session_id=…)
@@ -40,7 +41,7 @@ import os
 import socket
 
 from . import __version__
-from .constants import SOCK_HOST, SOCK_PORT
+from .constants import SETTINGS_PAGES, SOCK_HOST, SOCK_PORT
 
 
 # Names every consumer can reference. Keeping them as constants rather
@@ -59,6 +60,7 @@ ACTION_STATUS = "status"
 ACTION_DRANK = "drank"   # M4: water-reminder acknowledgment
 ACTION_POMODORO_START = "pomodoro_start"   # M6: start work/break cycle
 ACTION_POMODORO_STOP = "pomodoro_stop"     # M6: end the cycle
+ACTION_SETTINGS = "settings"   # open the settings & About window
 
 KNOWN_ACTIONS = frozenset({
     ACTION_CELEBRATE,
@@ -74,6 +76,7 @@ KNOWN_ACTIONS = frozenset({
     ACTION_DRANK,
     ACTION_POMODORO_START,
     ACTION_POMODORO_STOP,
+    ACTION_SETTINGS,
 })
 
 
@@ -159,6 +162,9 @@ def dispatch_action(state, action, payload=None):
             break_s=payload.get("break_seconds"))
     elif action == ACTION_POMODORO_STOP:
         state.stop_pomodoro()
+    elif action == ACTION_SETTINGS:
+        page = payload.get("page")
+        state.open_settings(page if page in SETTINGS_PAGES else None)
     else:
         # Defensive default: any unrecognised action celebrates. This
         # preserves backward-compat with older buddy clients that sent

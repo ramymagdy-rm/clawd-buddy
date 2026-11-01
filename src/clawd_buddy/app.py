@@ -105,11 +105,12 @@ def main():
         sys.exit(0)
 
     # --send / --wave / --top / --quit / --prompt-start / --message /
-    # --drank / --pomodoro / --pomodoro-stop
+    # --drank / --pomodoro / --pomodoro-stop / --settings
     # (any of these signals a running instance and exits)
     if (args.send is not None or args.wave or args.top or args.quit
             or args.prompt_start or args.message is not None or args.drank
-            or args.pomodoro is not None or args.pomodoro_stop):
+            or args.pomodoro is not None or args.pomodoro_stop
+            or args.settings is not None):
         payload_obj = {}
         # Claude Code passes hook metadata (session_id, cwd, …) as JSON
         # on stdin to every hook command; from a terminal there's none.
@@ -123,6 +124,9 @@ def main():
         elif args.drank:
             # M4: external acknowledgment for the water-reminder.
             payload_obj["action"] = "drank"
+        elif args.settings is not None:
+            payload_obj["action"] = "settings"
+            payload_obj["page"] = args.settings
         elif args.pomodoro_stop:
             # M6: end the running pomodoro cycle.
             payload_obj["action"] = "pomodoro_stop"
@@ -211,7 +215,7 @@ def _run_buddy(args, port):
     from . import history
     from .placement import DragPlacement
     from .state import BuddyState
-    from .ui.about import make_buddy_icon_surface
+    from .ui.about import make_buddy_icon_surface, show_about_dialog
     from .ui.drawing import (
         GROUND_Y, OFFSET_LIMITS, BuddyRenderer, compose_frame,
         frame_size_for)
@@ -467,6 +471,11 @@ def _run_buddy(args, port):
             region_recheck_at = t + 0.3
 
         # Apply pending bring-to-front request
+        # Settings window asked for over IPC (`--settings`).
+        if state._settings_requested is not None:
+            page, state._settings_requested = state._settings_requested, None
+            show_about_dialog(state, page or None)
+
         if state._raise_requested:
             state._raise_requested = False
             topmost = True
@@ -578,6 +587,10 @@ def _run_buddy(args, port):
                 wx, wy, _, _ = get_window_rect(handle)
                 placement.begin(pointer_pos(ev.pos), (wx, wy))
                 reconcile_at = None
+            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 3:
+                # Right-click opens the settings window (it runs on its
+                # own thread; a second click just raises it).
+                show_about_dialog(state)
             elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
                 if placement.dragging:
                     placement.end()

@@ -28,3 +28,8 @@ TKEY = (1, 1, 1)
 # signals from `clawd-buddy --send` / `--wave` / `--prompt-start` / etc.
 SOCK_HOST = "127.0.0.1"
 SOCK_PORT = 44556
+
+# Pages of the settings & About window, in sidebar order. Here rather
+# than in ui.about so the CLI can offer `--settings PAGE` without
+# importing any UI code.
+SETTINGS_PAGES = ("buddy", "sound", "reminders", "focus", "about")

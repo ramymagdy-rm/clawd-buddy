@@ -1,57 +1,111 @@
 # Copyright (c) 2026 Ramy Ezzat
 # Licensed under the MIT License — see LICENSE in the project root.
 
-"""The About dialog and the shared buddy-silhouette icon.
+"""The settings & About window, and the shared buddy-silhouette icon.
 
-M4 turned the dialog into a `ttk.Notebook` with two tabs:
+One window controls everything the tray menu does, and more. A sidebar
+switches between five pages:
 
-  • **About** — the original version / author / link card.
-  • **Reminders** — the rich editing surface for the water-drinking
-    reminder (enable, interval, sound, quiet hours, plus a live
-    countdown and a "Drank now" button).
+  • **Buddy**: live status, Celebrate / Bring to front / Center, size,
+    theme, reduce motion, workspace badges, start at login.
+  • **Sound**: sound pack, volume, quiet hours.
+  • **Reminders**: today's cups, recent days, and the water-reminder
+    schedule (interval, first reminder, sound, overnight pause).
+  • **Focus**: the pomodoro timer, with a live countdown ring.
+  • **About**: version, links, keyboard shortcuts.
 
-tkinter is still imported lazily inside the worker so the buddy
-launches on stripped-down Python installs without `_tkinter` — both
-tabs degrade gracefully.
+Every change applies to the running buddy at once and is saved; there
+is no Save button. The window polls the live state a few times a
+second, so changes from the tray or the keyboard show up here too.
 
-`_make_buddy_icon_image` is shared by the system-tray and the About
-window because the buddy silhouette is the branding everywhere the
-app shows itself.
+Open it from the tray ("Settings & About…") or by right-clicking the
+buddy. It runs Tk on its own thread; tkinter and Pillow are imported
+lazily so the buddy still launches on Pythons without `_tkinter`.
+
+`_make_buddy_icon_image` is shared by the system tray and this window
+because the buddy silhouette is the branding everywhere the app shows
+itself.
 """
 
+import datetime
+import os
 import threading
 
 from .. import __version__ as APP_VERSION
+from ..constants import SETTINGS_PAGES
 from ..config import (
     REMINDER_INTERVALS,
     REMINDER_INTERVAL_LABELS,
+    VOLUME_STEPS,
+    _config_dir,
+    save_quiet_hours_pref,
+    save_reduce_motion_pref,
     save_reminder_anchor_minute_pref,
     save_reminder_enabled_pref,
     save_reminder_interval_pref,
     save_reminder_quiet_hours_pref,
     save_reminder_sound_pref,
+    save_scale_pref,
+    save_sound_pack_pref,
+    save_theme_pref,
+    save_volume_pref,
+    save_workspace_badge_pref,
 )
-from .sound import REMINDER_SOUND_CHOICES, REMINDER_SOUND_OFF
+from .sound import (
+    REMINDER_SOUND_CHOICES,
+    REMINDER_SOUND_OFF,
+    SOUND_PACK_NAMES,
+    SOUND_PACK_OFF,
+)
 
 
 _REPO_URL = "https://github.com/ramymagdy-rm/clawd-buddy"
 
-# Reentrancy guard — the menu callback fires synchronously and a user
-# can spam-click the About entry. Without this we'd spin up multiple
-# Toplevels.
+# Reentrancy guard: the tray callback fires synchronously and a user
+# can spam-click the menu entry. A second request raises the open
+# window (and switches page) instead of spinning up another Tk.
 _ABOUT_DIALOG_OPEN = False
+_RAISE_REQUEST = None   # None, or the page to show ("" = keep page)
 
-# Quiet-hours combobox values: every half-hour. 30-minute resolution
-# covers the realistic schedules people actually keep without forcing
-# users into a free-form text entry.
+PAGES = SETTINGS_PAGES
+
+# Quiet-hours pickers: every half-hour.
 _HHMM_OPTIONS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
+_HALF_HOURS = list(range(0, 24 * 60, 30))
+
+# Pomodoro length picker (minutes).
+_POMODORO_MINUTES = (1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60,
+                     75, 90, 105, 120, 150, 180)
+
+# Status colours, the same as the buddy's pill (drawing.ACCENT; that
+# module imports pygame, so they're repeated here and a test keeps the
+# two in step).
+STATUS_COLORS = {
+    "celebrating": (72, 214, 120),
+    "waving":      (255, 196, 61),
+    "greeting":    (64, 186, 230),
+    "thinking":    (168, 140, 240),
+}
+_IDLE_COLOR = (128, 130, 150)
+
+_MODE_TITLES = {
+    "idle":        "Idle",
+    "thinking":    "Thinking",
+    "celebrating": "Done!",
+    "waving":      "Needs your input",
+    "greeting":    "New session",
+}
+
+_INTERVAL_SHORT = {
+    30 * 60: "30m", 60 * 60: "1h", 90 * 60: "1.5h", 120 * 60: "2h",
+    240 * 60: "4h",
+}
 
 
 def _interval_label_for(seconds):
     """Return the human label for a known interval, or the 1-hour label
-    when the value isn't in the preset set. The combobox loader uses
-    this so a hand-edited config that drifted out of range still shows
-    *something* selected rather than rendering blank."""
+    when the value isn't in the preset set, so a hand-edited config
+    that drifted out of range still shows something sensible."""
     return REMINDER_INTERVAL_LABELS.get(
         seconds, REMINDER_INTERVAL_LABELS[REMINDER_INTERVALS[1]]
     )
@@ -59,19 +113,125 @@ def _interval_label_for(seconds):
 
 def _interval_from_label(label):
     """Inverse of `_interval_label_for`. Returns the seconds value for
-    a known label, or `None` when the string doesn't match any preset
-    (the caller falls back to the current value in that case)."""
+    a known label, or `None` when the string doesn't match any preset."""
     for sec, lbl in REMINDER_INTERVAL_LABELS.items():
         if lbl == label:
             return sec
     return None
 
 
-# Combobox values for the interval picker, in build order so the user
-# scrolls from shortest to longest.
+# Interval labels in build order, shortest to longest.
 _INTERVAL_LABEL_OPTIONS = [
     REMINDER_INTERVAL_LABELS[s] for s in REMINDER_INTERVALS
 ]
+
+
+def _format_seconds(secs):
+    """Seconds-remaining as a short phrase for the reminder countdown.
+    Negative values (overdue) render as "now"."""
+    if secs is None:
+        return "—"
+    if secs <= 0:
+        return "now"
+    if secs < 90:
+        return f"in {int(secs)}s"
+    mins = int(secs / 60)
+    if mins < 90:
+        return f"in {mins} min"
+    hours = mins / 60
+    return f"in {hours:.1f}h"
+
+
+def _format_clock(secs):
+    """Seconds as a countdown clock: 24:59, or 1:05:00 past an hour."""
+    secs = max(0, int(round(secs or 0)))
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def _hhmm_to_minutes(text):
+    """Parse HH:MM into minutes from midnight; None on garbage."""
+    try:
+        hh, mm = text.split(":")
+        h, m = int(hh), int(mm)
+        if not (0 <= h < 24 and 0 <= m < 60):
+            return None
+        return h * 60 + m
+    except (ValueError, AttributeError):
+        return None
+
+
+def _minutes_to_hhmm(minutes):
+    """Inverse of `_hhmm_to_minutes`. "00:00" for None or garbage."""
+    if not isinstance(minutes, int) or not (0 <= minutes < 1440):
+        return "00:00"
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _short_path(path, limit=44):
+    """`path` with the home folder as ~, cut in the middle if long."""
+    home = os.path.expanduser("~")
+    if home and path.startswith(home):
+        path = "~" + path[len(home):]
+    if len(path) > limit:
+        keep = (limit - 1) // 2
+        path = path[:keep] + "…" + path[-keep:]
+    return path
+
+
+def _span_text(start, end):
+    """How a quiet-hours window reads: "Overnight, 9 hours"."""
+    if start == end:
+        return "Start and end are the same"
+    mins = (end - start) % (24 * 60)
+    h, m = divmod(mins, 60)
+    length = f"{h} hour{'s' if h != 1 else ''}" + (f" {m} min" if m else "")
+    return ("Overnight, " if end < start else "") + length
+
+
+def _rgb_hex(rgb):
+    return "#%02x%02x%02x" % tuple(rgb)
+
+
+def status_summary(state):
+    """(title, colour hex, detail) describing what the buddy is doing,
+    for the sidebar and the Buddy page."""
+    mode = getattr(state, "mode", "idle")
+    n = state.working_sessions
+    title = _MODE_TITLES.get(mode, mode.title())
+    if mode == "thinking" and n > 1:
+        title = f"Thinking ×{n}"
+    color = _rgb_hex(STATUS_COLORS.get(mode, _IDLE_COLOR))
+    if n == 1:
+        detail = "1 Claude Code session working"
+    elif n > 1:
+        detail = f"{n} Claude Code sessions working"
+    elif state.reminder_active:
+        detail = "Time to drink some water"
+    elif state.pomodoro_active:
+        phase = "Focus" if state.pomodoro_phase == "work" else "Break"
+        left = _format_clock(state.pomodoro_seconds_remaining())
+        detail = f"{phase} · {left} left"
+    else:
+        detail = "Waiting for Claude Code"
+    return title, color, detail
+
+
+def week_bars(state, today=None):
+    """Recent drinking history as [(weekday, cups)], oldest first,
+    ending with today. Up to seven bars."""
+    today = today or datetime.date.today()
+
+    def label(iso):
+        try:
+            return datetime.date.fromisoformat(iso).strftime("%a")[:2]
+        except (TypeError, ValueError):
+            return "?"
+    past = [(label(e.get("date")), int(e.get("count", 0)))
+            for e in list(state.recent_days)[:6]]
+    past.reverse()
+    return past + [(today.strftime("%a")[:2], int(state.cups_today))]
 
 
 def _make_buddy_icon_image():
@@ -150,369 +310,825 @@ def make_buddy_icon_surface():
     return builder(img.tobytes(), img.size, img.mode)
 
 
-def show_about_dialog(state=None):
-    """Open the About dialog. Reentrant clicks are debounced — at most
-    one dialog at a time. Spawned on its own thread so it doesn't block
-    the tray menu (pystray's callbacks are synchronous) or the pygame
-    loop.
 
-    `state` is the live `BuddyState`; when provided, the Reminders
-    tab edits its fields directly. When omitted (older callers or
-    tests), the Reminders tab degrades to a read-only "no state
-    attached" notice.
+
+def show_about_dialog(state=None, page=None):
+    """Open the settings & About window on its own thread, so it blocks
+    neither the tray menu (pystray callbacks are synchronous) nor the
+    pygame loop. If it's already open, raise it (and switch to `page`).
+
+    `state` is the live `BuddyState`. Without one (older callers,
+    tests) only the About page is shown.
     """
-    global _ABOUT_DIALOG_OPEN
+    global _ABOUT_DIALOG_OPEN, _RAISE_REQUEST
     if _ABOUT_DIALOG_OPEN:
+        _RAISE_REQUEST = page or ""
         return
     _ABOUT_DIALOG_OPEN = True
-    threading.Thread(target=_run_about_dialog, args=(state,),
+    _RAISE_REQUEST = None
+    threading.Thread(target=_run_about_dialog, args=(state, page),
                      daemon=True).start()
 
 
-def _format_seconds(secs):
-    """Render a seconds-remaining value as a short human string for
-    the Reminders-tab countdown label. Negative values (overdue)
-    render as "now"."""
-    if secs is None:
-        return "—"
-    if secs <= 0:
-        return "now"
-    if secs < 90:
-        return f"in {int(secs)}s"
-    mins = int(secs / 60)
-    if mins < 90:
-        return f"in {mins} min"
-    hours = mins / 60
-    return f"in {hours:.1f}h"
-
-
-def _hhmm_to_minutes(text):
-    """Parse an HH:MM string from the combobox into minutes-from-
-    midnight. Returns None on garbage so callers can decide whether
-    to fall back to the previous value or treat it as 'disabled'."""
-    try:
-        hh, mm = text.split(":")
-        h, m = int(hh), int(mm)
-        if not (0 <= h < 24 and 0 <= m < 60):
-            return None
-        return h * 60 + m
-    except (ValueError, AttributeError):
-        return None
-
-
-def _minutes_to_hhmm(minutes):
-    """Inverse of `_hhmm_to_minutes`. Defaults to "00:00" for None so
-    the combobox always has a visible value."""
-    if not isinstance(minutes, int) or not (0 <= minutes < 1440):
-        return "00:00"
-    return f"{minutes // 60:02d}:{minutes % 60:02d}"
-
-
-def _run_about_dialog(state):
+def _run_about_dialog(state, page=None):
     global _ABOUT_DIALOG_OPEN
     try:
         import tkinter as tk
-        from tkinter import ttk
-        import webbrowser
 
-        root = tk.Tk()
-        root.title("About Clawd Buddy")
+        root = tk.Tk(className="clawd-buddy")
+        root.withdraw()
+        root.title("Clawd Buddy")
         root.resizable(False, False)
-
-        # Replace the default tk feather icon with the buddy silhouette.
-        # PhotoImage must be retained on `root` — tkinter doesn't keep
-        # its own reference and the icon vanishes on GC otherwise.
         try:
             from PIL import ImageTk
-            icon_photo = ImageTk.PhotoImage(_make_buddy_icon_image())
+            icon_photo = ImageTk.PhotoImage(_make_buddy_icon_image(),
+                                            master=root)
             root.iconphoto(True, icon_photo)
             root._buddy_icon_ref = icon_photo
         except Exception as ie:
-            print(f"[buddy] About dialog icon failed: {ie}")
+            print(f"[buddy] Settings window icon failed: {ie}")
 
-        notebook = ttk.Notebook(root)
-        notebook.pack(expand=True, fill="both", padx=10, pady=10)
+        ControlCenter(root, state, page)
 
-        _build_about_tab(notebook, webbrowser)
-        _build_reminders_tab(notebook, state, root)
-
-        # Center on screen — tk needs a refresh before geometry is known.
+        # Centre on screen once Tk knows the natural size.
         root.update_idletasks()
-        w = max(root.winfo_reqwidth(), 360)
-        h = root.winfo_reqheight()
+        w, h = root.winfo_reqwidth(), root.winfo_reqheight()
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-        root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+        root.geometry(f"+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        root.deiconify()
+        # Open above everything (the buddy is always on top), then
+        # behave like a normal window.
         root.attributes("-topmost", True)
+        root.lift()
+        root.focus_force()
+        root.after(600, lambda: root.attributes("-topmost", False))
         root.protocol("WM_DELETE_WINDOW", root.destroy)
         root.mainloop()
     except Exception as e:
-        print(f"[buddy] About dialog failed: {e}")
+        print(f"[buddy] Settings window failed: {e}")
     finally:
         _ABOUT_DIALOG_OPEN = False
 
 
-def _build_about_tab(notebook, webbrowser):
-    """Build the existing About tab — version, author, repo link.
-    Kept as a function for symmetry with `_build_reminders_tab`."""
-    import tkinter as tk
+class ControlCenter:
+    """Builds the window into `root` and keeps it in sync with `state`."""
 
-    frame = tk.Frame(notebook, padx=24, pady=20)
-    notebook.add(frame, text="About")
+    TICK_MS = 400
 
-    tk.Label(frame, text="Clawd Buddy",
-             font=("Segoe UI", 16, "bold")).pack()
-    tk.Label(frame, text=f"Version {APP_VERSION}",
-             font=("Segoe UI", 9)).pack(pady=(2, 10))
+    def __init__(self, root, state, page=None):
+        import tkinter as tk
+        from . import tkkit
 
-    tk.Label(frame, text="A tiny animated terminal pet that sits",
-             font=("Segoe UI", 9)).pack()
-    tk.Label(frame, text="on your taskbar and reacts to",
-             font=("Segoe UI", 9)).pack()
-    tk.Label(frame, text="coding-assistant events.",
-             font=("Segoe UI", 9)).pack(pady=(0, 12))
+        self.tk = tk
+        self.root = root
+        self.state = state
+        palette = tkkit.DARK if tkkit.system_prefers_dark() else tkkit.LIGHT
+        self.kit = kit = tkkit.Kit(root, palette)
+        self.k = tkkit
+        self.p = p = palette
+        root.configure(bg=p["bg"])
 
-    tk.Label(frame, text="Author: Ramy Ezzat",
-             font=("Segoe UI", 9)).pack()
-    tk.Label(frame, text="License: MIT",
-             font=("Segoe UI", 9)).pack(pady=(0, 8))
+        self.side = tk.Frame(root, bg=p["side"], width=kit.px(212))
+        self.side.pack(side="left", fill="y")
+        self.side.pack_propagate(False)
+        main = tk.Frame(root, bg=p["bg"])
+        main.pack(side="left", fill="both", expand=True)
+        self.stack = tk.Frame(main, bg=p["bg"])
+        self.stack.pack(fill="both", expand=True, padx=kit.px(28),
+                        pady=(kit.px(22), kit.px(26)))
+        self.stack.grid_columnconfigure(0, weight=1)
+        self.stack.grid_rowconfigure(0, weight=1)
 
-    link = tk.Label(frame, text=_REPO_URL,
-                    fg="#3a7ad6", cursor="hand2",
-                    font=("Segoe UI", 9, "underline"))
-    link.pack()
-    link.bind("<Button-1>", lambda _e: webbrowser.open(_REPO_URL))
+        builders = {
+            "buddy": ("Buddy", "buddy", self._build_buddy),
+            "sound": ("Sound", "sound", self._build_sound),
+            "reminders": ("Reminders", "water", self._build_reminders),
+            "focus": ("Focus", "focus", self._build_focus),
+            "about": ("About", "info", self._build_about),
+        }
+        keys = PAGES if state is not None else ("about",)
+        self.pages, self.nav = {}, {}
+        # Main controls by name, for tests and the raise-to-page path.
+        self.controls = {}
+        self._build_sidebar(keys, builders)
+        for key in keys:
+            frame = tk.Frame(self.stack, bg=p["bg"])
+            frame.grid(row=0, column=0, sticky="nsew")
+            builders[key][2](frame)
+            self.pages[key] = frame
+        self.current = None
+        self.show(page if page in self.pages else keys[0])
 
+        root.bind("<Escape>", lambda _e: root.destroy())
+        root.bind("<Control-w>", lambda _e: root.destroy())
+        self._tick()
 
-def _build_reminders_tab(notebook, state, root):
-    """Build the Reminders tab — enable toggle, interval radios, sound
-    combobox, quiet-hours combo pair, live countdown, Drank-now button.
-
-    All changes save to `config.json` and mutate `state` immediately —
-    no Save button. Tracks the live countdown via an `after()` loop so
-    the user sees the next-fire time tick down without polling
-    workarounds.
-    """
-    import tkinter as tk
-    from tkinter import ttk
-
-    frame = tk.Frame(notebook, padx=20, pady=16)
-    notebook.add(frame, text="Reminders")
-
-    if state is None:
-        tk.Label(
-            frame,
-            text=("Reminder controls are only available when the\n"
-                  "About dialog is opened from a running buddy."),
-            font=("Segoe UI", 9),
-            justify="center",
-        ).pack(pady=20)
-        return
-
-    # ── Enable toggle ──────────────────────────────────────────
-    enabled_var = tk.BooleanVar(value=bool(state.reminder_enabled))
-
-    def on_enabled_change():
-        state.set_reminder_enabled(enabled_var.get())
-        save_reminder_enabled_pref(enabled_var.get())
-        _refresh_widget_states()
-
-    ttk.Checkbutton(
-        frame,
-        text="Remind me to drink water",
-        variable=enabled_var,
-        command=on_enabled_change,
-    ).pack(anchor="w", pady=(0, 10))
-
-    # ── Interval combobox ──────────────────────────────────────
-    # Same scrolling-dropdown affordance as the quiet-hours selectors
-    # below — keeps the Reminders tab visually uniform now that every
-    # configurable value uses the same widget shape.
-    tk.Label(frame, text="How often:",
-             font=("Segoe UI", 9, "bold")).pack(anchor="w")
-    interval_var = tk.StringVar(
-        value=_interval_label_for(int(state.reminder_interval)))
-    interval_combo = ttk.Combobox(
-        frame,
-        values=_INTERVAL_LABEL_OPTIONS,
-        textvariable=interval_var,
-        state="readonly",
-        width=16,
-    )
-    interval_combo.pack(anchor="w", pady=(2, 10))
-
-    def on_interval_change(_event=None):
-        sec = _interval_from_label(interval_var.get())
-        if sec is None:
-            # Combobox can't normally emit an unknown label (readonly),
-            # but guard anyway — silently snap the visible value back to
-            # the current state rather than persisting garbage.
-            interval_var.set(_interval_label_for(state.reminder_interval))
+    # ── Navigation ───────────────────────────────────────────────
+    def show(self, key):
+        if key not in self.pages or key == self.current:
             return
-        state.set_reminder_interval(sec)
-        save_reminder_interval_pref(sec)
+        self.current = key
+        self.pages[key].tkraise()
+        for k, item in self.nav.items():
+            item.selected = k == key
+            item.draw()
 
-    interval_combo.bind("<<ComboboxSelected>>", on_interval_change)
-
-    # ── Daily start time (HH:MM) ───────────────────────────────
-    # M4.3 anchor — the wall-clock minute the schedule cycles from.
-    # Same HH:MM combobox shape (30-min steps) as the quiet-hours
-    # selectors. With interval=1h and start=09:00, reminders fire at
-    # 09:00, 10:00, 11:00 … through the day.
-    tk.Label(frame, text="Start reminders at:",
-             font=("Segoe UI", 9, "bold")).pack(anchor="w")
-    anchor_var = tk.StringVar(
-        value=_minutes_to_hhmm(state.reminder_anchor_minute))
-    anchor_combo = ttk.Combobox(
-        frame, values=_HHMM_OPTIONS, textvariable=anchor_var,
-        state="readonly", width=7)
-    anchor_combo.pack(anchor="w", pady=(2, 10))
-
-    def on_anchor_change(_event=None):
-        m = _hhmm_to_minutes(anchor_var.get())
-        if m is None:
-            # Readonly combobox shouldn't emit garbage; snap back if
-            # somehow it does rather than persisting an unparseable
-            # anchor.
-            anchor_var.set(_minutes_to_hhmm(state.reminder_anchor_minute))
-            return
-        state.set_reminder_anchor_minute(m)
-        save_reminder_anchor_minute_pref(m)
-
-    anchor_combo.bind("<<ComboboxSelected>>", on_anchor_change)
-
-    # ── Sound combobox ─────────────────────────────────────────
-    tk.Label(frame, text="Reminder sound:",
-             font=("Segoe UI", 9, "bold")).pack(anchor="w")
-    sound_var = tk.StringVar(value=state.reminder_sound)
-    sound_combo = ttk.Combobox(
-        frame,
-        values=REMINDER_SOUND_CHOICES,
-        textvariable=sound_var,
-        state="readonly",
-        width=12,
-    )
-    sound_combo.pack(anchor="w", pady=(2, 10))
-
-    def on_sound_change(_event=None):
-        state.set_reminder_sound(sound_var.get())
-        save_reminder_sound_pref(sound_var.get())
-        # Preview the new sound when it isn't 'off' so the user can
-        # audition without waiting for the next interval to fire.
-        if sound_var.get() != REMINDER_SOUND_OFF:
-            state._pending_reminder_sound = sound_var.get()
-
-    sound_combo.bind("<<ComboboxSelected>>", on_sound_change)
-
-    # ── Quiet hours ────────────────────────────────────────────
-    quiet_frame = tk.Frame(frame)
-    quiet_frame.pack(anchor="w", pady=(0, 10))
-    tk.Label(quiet_frame, text="Quiet hours (no reminders):",
-             font=("Segoe UI", 9, "bold")).grid(row=0, column=0,
-                                                columnspan=3, sticky="w")
-    tk.Label(quiet_frame, text="from").grid(row=1, column=0, padx=(0, 4))
-
-    quiet_start_var = tk.StringVar(
-        value=_minutes_to_hhmm(state.reminder_quiet_start))
-    quiet_end_var = tk.StringVar(
-        value=_minutes_to_hhmm(state.reminder_quiet_end))
-
-    quiet_start = ttk.Combobox(quiet_frame, values=_HHMM_OPTIONS,
-                               textvariable=quiet_start_var,
-                               state="readonly", width=7)
-    quiet_start.grid(row=1, column=1)
-    tk.Label(quiet_frame, text="to").grid(row=1, column=2, padx=4)
-    quiet_end = ttk.Combobox(quiet_frame, values=_HHMM_OPTIONS,
-                             textvariable=quiet_end_var,
-                             state="readonly", width=7)
-    quiet_end.grid(row=1, column=3)
-
-    def on_quiet_change(_event=None):
-        s = _hhmm_to_minutes(quiet_start_var.get())
-        e = _hhmm_to_minutes(quiet_end_var.get())
-        # Zero-length window ⇒ treat as disabled, like the M3 quiet
-        # hours plumbing.
-        if s == e:
-            state.set_reminder_quiet_hours(None, None)
-            save_reminder_quiet_hours_pref(None, None)
-        else:
-            state.set_reminder_quiet_hours(s, e)
-            save_reminder_quiet_hours_pref(s, e)
-
-    quiet_start.bind("<<ComboboxSelected>>", on_quiet_change)
-    quiet_end.bind("<<ComboboxSelected>>", on_quiet_change)
-
-    # ── Today's cup count (M4.1) ───────────────────────────────
-    # Always visible — the count is meaningful even when the reminder
-    # is disabled (you can still ack manually via the button below or
-    # the tray's "I drank water" entry). Recent-days line sits under
-    # the headline count; both refresh from the 1 Hz tick.
-    cups_var = tk.StringVar(value="")
-    cups_label = tk.Label(frame, textvariable=cups_var,
-                          font=("Segoe UI", 11, "bold"))
-    cups_label.pack(anchor="w", pady=(4, 0))
-
-    recent_var = tk.StringVar(value="")
-    recent_label = tk.Label(frame, textvariable=recent_var,
-                            font=("Segoe UI", 9), fg="#666")
-    recent_label.pack(anchor="w", pady=(0, 6))
-
-    # ── Live status + Drank-now button ─────────────────────────
-    status_var = tk.StringVar(value="")
-    status_label = tk.Label(frame, textvariable=status_var,
-                            font=("Segoe UI", 9), fg="#555")
-    status_label.pack(anchor="w", pady=(4, 6))
-
-    def on_drank():
-        state.drink_acknowledged()
-        # Bump the display immediately so the user sees the count tick
-        # without waiting for the next 1 Hz refresh.
-        _refresh_history_display()
-
-    drank_btn = ttk.Button(frame, text="I drank water now",
-                           command=on_drank)
-    drank_btn.pack(anchor="w")
-
-    # ── Refresh + tick loop ────────────────────────────────────
-    def _refresh_widget_states():
-        st = "normal" if enabled_var.get() else "disabled"
-        combo_st = "readonly" if enabled_var.get() else "disabled"
-        interval_combo.configure(state=combo_st)
-        anchor_combo.configure(state=combo_st)
-        sound_combo.configure(state=combo_st)
-        quiet_start.configure(state=combo_st)
-        quiet_end.configure(state=combo_st)
-        # Drank-now button stays enabled even when the reminder is off
-        # — the count is independent of the reminder firing.
-
-    def _refresh_history_display():
-        # Today line.
-        cups = state.cups_today
-        cups_var.set(f"{cups} cup{'s' if cups != 1 else ''} today")
-        # Recent line — most recent first, e.g. "Recent: 6 · 5 · 7 · 4".
-        if state.recent_days:
-            counts = " · ".join(str(e["count"]) for e in state.recent_days)
-            recent_var.set(f"Recent days: {counts}")
-        else:
-            recent_var.set("")
-
-    def _tick_status():
-        _refresh_history_display()
-        if not enabled_var.get():
-            status_var.set("Reminder disabled")
-        elif state.reminder_active:
-            status_var.set("Reminding now — press Space or click below")
-        elif state.is_reminder_quiet_now():
-            status_var.set("Quiet hours active — paused until morning")
-        else:
-            secs = state.reminder_seconds_until_next()
-            status_var.set(f"Next reminder {_format_seconds(secs)}")
-        # 1 Hz refresh — countdown ticks down visibly without spinning
-        # the CPU. `after()` keeps the loop alive until the dialog is
-        # destroyed, at which point tkinter cancels pending callbacks.
+    def _tick(self):
+        global _RAISE_REQUEST
+        if _RAISE_REQUEST is not None:
+            page, _RAISE_REQUEST = _RAISE_REQUEST, None
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+            if page:
+                self.show(page)
+        self.kit.refresh_all()
         try:
-            root.after(1000, _tick_status)
-        except tk.TclError:
+            self.root.after(self.TICK_MS, self._tick)
+        except self.tk.TclError:
             pass  # window closed
 
-    _refresh_widget_states()
-    _tick_status()
+    # ── Layout helpers ───────────────────────────────────────────
+    def _header(self, parent, title, subtitle):
+        tk, p, kit = self.tk, self.p, self.kit
+        tk.Label(parent, text=title, font=kit.f_title, fg=p["text"],
+                 bg=p["bg"], anchor="w").pack(fill="x")
+        tk.Label(parent, text=subtitle, font=kit.f_body, fg=p["muted"],
+                 bg=p["bg"], anchor="w").pack(fill="x",
+                                              pady=(kit.px(2), kit.px(14)))
+
+    def _section(self, parent, title=None):
+        tk, p, kit = self.tk, self.p, self.kit
+        if title:
+            tk.Label(parent, text=title.upper(), font=kit.f_small,
+                     fg=p["faint"], bg=p["bg"], anchor="w").pack(
+                fill="x", pady=(kit.px(4), kit.px(6)), padx=kit.px(4))
+        card = self.k.Card(parent, kit)
+        card.pack(fill="x", pady=(0, kit.px(14)))
+        card.rows = 0
+        return card
+
+    def _row(self, card, title, sub=None, stacked=False):
+        """A labelled row in a card. Returns (control_frame, sub_label);
+        put the control in control_frame. `stacked` puts the control
+        under the label instead of at the right."""
+        tk, p, kit = self.tk, self.p, self.kit
+        body = card.body
+        if card.rows:
+            tk.Frame(body, bg=p["border"], height=1).pack(
+                fill="x", pady=kit.px(11))
+        card.rows += 1
+        row = tk.Frame(body, bg=p["card"])
+        row.pack(fill="x")
+        text = tk.Frame(row, bg=p["card"])
+        text.pack(side="top" if stacked else "left", fill="x", expand=True)
+        tk.Label(text, text=title, font=kit.f_bold, fg=p["text"],
+                 bg=p["card"], anchor="w").pack(fill="x")
+        sub_label = None
+        if sub is not None:
+            sub_label = tk.Label(text, text=sub, font=kit.f_small,
+                                 fg=p["muted"], bg=p["card"], anchor="w",
+                                 justify="left")
+            sub_label.pack(fill="x")
+        ctrl = tk.Frame(row, bg=p["card"])
+        if stacked:
+            ctrl.pack(side="top", anchor="w", pady=(kit.px(8), 0))
+        else:
+            ctrl.pack(side="right", padx=(kit.px(16), 0))
+        return ctrl, sub_label
+
+    def _live(self, fn):
+        """Register `fn` to run on every refresh tick."""
+        class _Hook:
+            refresh = staticmethod(fn)
+        self.kit.register(_Hook())
+        fn()
+
+    def _label(self, parent, text="", font=None, fg=None, bg=None, **kw):
+        return self.tk.Label(parent, text=text, font=font or self.kit.f_body,
+                             fg=fg or self.p["text"], bg=bg or self.p["card"],
+                             **kw)
+
+    # ── Sidebar ──────────────────────────────────────────────────
+    def _build_sidebar(self, keys, builders):
+        tk, p, kit = self.tk, self.p, self.kit
+        side = self.side
+        brand = tk.Frame(side, bg=p["side"])
+        brand.pack(fill="x", padx=kit.px(18), pady=(kit.px(20), kit.px(14)))
+        try:
+            from PIL import ImageTk
+            img = _make_buddy_icon_image().resize((kit.px(36), kit.px(36)))
+            self._brand_icon = ImageTk.PhotoImage(img, master=self.root)
+            tk.Label(brand, image=self._brand_icon, bg=p["side"]).pack(
+                side="left", padx=(0, kit.px(10)))
+        except Exception:
+            pass
+        names = tk.Frame(brand, bg=p["side"])
+        names.pack(side="left")
+        tk.Label(names, text="Clawd Buddy", font=kit.f_h2, fg=p["text"],
+                 bg=p["side"], anchor="w").pack(fill="x")
+        tk.Label(names, text=f"v{APP_VERSION}", font=kit.f_small,
+                 fg=p["muted"], bg=p["side"], anchor="w").pack(fill="x")
+
+        if self.state is not None:
+            self._build_status_chip(side)
+
+        for key in keys:
+            title, icon, _ = builders[key]
+            item = self._nav_item(side, key, title, icon)
+            item.pack(fill="x", padx=kit.px(10), pady=kit.px(1))
+            self.nav[key] = item
+
+        if self.state is not None:
+            self._build_quit(side)
+
+    def _build_status_chip(self, side):
+        tk, p, kit = self.tk, self.p, self.kit
+        box = tk.Frame(side, bg=p["side"])
+        box.pack(fill="x", padx=kit.px(18), pady=(0, kit.px(16)))
+        dot = tk.Canvas(box, width=kit.px(10), height=kit.px(10),
+                        bg=p["side"], highlightthickness=0)
+        dot.pack(side="left", anchor="n", pady=(kit.px(5), 0))
+        text = tk.Frame(box, bg=p["side"])
+        text.pack(side="left", padx=(kit.px(8), 0), fill="x")
+        title = tk.Label(text, font=kit.f_bold, fg=p["text"], bg=p["side"],
+                         anchor="w")
+        title.pack(fill="x")
+        detail = tk.Label(text, font=kit.f_small, fg=p["muted"],
+                          bg=p["side"], anchor="w", justify="left",
+                          wraplength=kit.px(150))
+        detail.pack(fill="x")
+        last = {}
+
+        def refresh():
+            t, color, d = status_summary(self.state)
+            if last.get("v") == (t, color, d):
+                return
+            last["v"] = (t, color, d)
+            title.configure(text=t)
+            detail.configure(text=d)
+            dot.delete("all")
+            dot.create_image(0, 0, anchor="nw",
+                             image=kit.circle(kit.px(10), color))
+        self._live(refresh)
+
+    def _nav_item(self, parent, key, title, icon):
+        kit, p, mix = self.kit, self.p, self.k.mix
+        show = self.show
+
+        class _Nav(self.tk.Canvas):
+            def __init__(self):
+                super().__init__(parent, height=kit.px(36), bg=p["side"],
+                                 highlightthickness=0, cursor="hand2")
+                self.selected = False
+                self.hover = False
+                self.bind("<Button-1>", lambda _e: show(key))
+                self.bind("<Enter>", lambda _e: self._hov(True))
+                self.bind("<Leave>", lambda _e: self._hov(False))
+                self.bind("<Configure>", lambda _e: self.draw())
+
+            def _hov(self, v):
+                self.hover = v
+                self.draw()
+
+            def draw(self):
+                self.delete("all")
+                w, h = max(self.winfo_width(), 2), kit.px(36)
+                if self.selected or self.hover:
+                    fill = p["nav_sel"] if self.selected else p["hover"]
+                    if not self.selected:
+                        fill = mix(p["side"], fill, 0.6)
+                    self.create_image(0, 0, anchor="nw",
+                                      image=kit.rrect(w, h, kit.px(9), fill))
+                color = p["accent2"] if self.selected else p["muted"]
+                self.create_image(kit.px(12), h / 2, anchor="w",
+                                  image=kit.icon(icon, kit.px(18), color))
+                self.create_text(kit.px(40), h / 2, anchor="w", text=title,
+                                 fill=p["text"] if self.selected
+                                 else p["muted"],
+                                 font=kit.f_bold if self.selected
+                                 else kit.f_body)
+        return _Nav()
+
+    def _build_quit(self, side):
+        kit, p = self.kit, self.p
+        holder = self.tk.Frame(side, bg=p["side"])
+        holder.pack(side="bottom", fill="x", padx=kit.px(14),
+                    pady=kit.px(16))
+        armed = {"until": None}
+
+        def on_quit():
+            # Two clicks, so a stray one doesn't make the buddy vanish.
+            import time
+            now = time.monotonic()
+            if armed["until"] and now < armed["until"]:
+                self.state.should_quit = True
+                self.root.destroy()
+                return
+            armed["until"] = now + 3
+            btn.set_text("Click again to quit")
+
+            def disarm():
+                armed["until"] = None
+                btn.set_text("Quit Clawd Buddy")
+            self.root.after(3000, disarm)
+
+        btn = self.k.Button(holder, kit, "Quit Clawd Buddy", on_quit,
+                            kind="danger", bg=p["side"], width=184)
+        btn.pack(fill="x")
+
+    # ── Pages ────────────────────────────────────────────────────
+    def _build_buddy(self, page):
+        tk, p, kit, k, st = self.tk, self.p, self.kit, self.k, self.state
+        self._header(page, "Buddy", "What it's doing, and how it looks.")
+
+        hero = self._section(page)
+        top = tk.Frame(hero.body, bg=p["card"])
+        top.pack(fill="x")
+        dot = tk.Canvas(top, width=kit.px(14), height=kit.px(14),
+                        bg=p["card"], highlightthickness=0)
+        dot.pack(side="left", padx=(0, kit.px(10)))
+        title = self._label(top, font=kit.f_title)
+        title.pack(side="left")
+        detail = self._label(hero.body, fg=p["muted"], anchor="w")
+        detail.pack(fill="x", pady=(kit.px(2), 0))
+        chips = tk.Canvas(hero.body, height=kit.px(1), bg=p["card"],
+                          highlightthickness=0)
+        chips.pack(fill="x", pady=(kit.px(8), 0))
+        buttons = tk.Frame(hero.body, bg=p["card"])
+        buttons.pack(fill="x", pady=(kit.px(12), 0))
+        k.Button(buttons, kit, "Celebrate", st.celebrate,
+                 kind="primary").pack(side="left")
+        k.Button(buttons, kit, "Bring to front", st.bring_to_front).pack(
+            side="left", padx=kit.px(8))
+        k.Button(buttons, kit, "Center on screen",
+                 st.center_on_screen).pack(side="left")
+        last = {}
+
+        def refresh():
+            t, color, d = status_summary(st)
+            labels = tuple(st.working_workspaces()) if (
+                st.working_sessions) else ()
+            if last.get("v") == (t, color, d, labels):
+                return
+            last["v"] = (t, color, d, labels)
+            title.configure(text=t)
+            detail.configure(text=d)
+            dot.delete("all")
+            dot.create_image(0, 0, anchor="nw",
+                             image=kit.circle(kit.px(14), color))
+            self._draw_chips(chips, labels)
+        self._live(refresh)
+
+        look = self._section(page, "Appearance")
+        ctrl, _ = self._row(look, "Size", "Ctrl+1 … Ctrl+6 on the buddy")
+        c = self.controls
+        c["size"] = k.Segmented(
+            ctrl, kit, [(n, st.SCALE_LABELS[n]) for n in st.SCALE_PRESETS],
+            lambda: st.scale_preset, self._set_size)
+        c["size"].pack()
+        from .themes import THEMES
+        ctrl, _ = self._row(look, "Theme", stacked=True)
+        c["theme"] = k.Swatches(ctrl, kit, [
+            (name, name.title(), _rgb_hex(t["body_inner"]),
+             _rgb_hex(t["mouth_happy"]))
+            for name, t in THEMES.items()],
+            lambda: st.theme_name, self._set_theme)
+        c["theme"].pack(anchor="w")
+        ctrl, _ = self._row(look, "Reduce motion",
+                            "Calmer animations, no confetti")
+        c["reduce_motion"] = k.Toggle(ctrl, kit, lambda: st.reduce_motion,
+                                      self._set_reduce_motion)
+        c["reduce_motion"].pack()
+        ctrl, _ = self._row(look, "Workspace badges",
+                            "Show which project each session is in")
+        c["badges"] = k.Toggle(ctrl, kit,
+                               lambda: st.workspace_badge_enabled,
+                               self._set_badges)
+        c["badges"].pack()
+
+        from ..platform import startup_supported
+        if startup_supported():
+            system = self._section(page, "System")
+            ctrl, _ = self._row(system, "Start at login",
+                                "Open the buddy when you sign in")
+            c["startup"] = k.Toggle(ctrl, kit, self._startup_get,
+                                    self._startup_set)
+            c["startup"].pack()
+
+    def _draw_chips(self, canvas, labels):
+        from ..state import workspace_badge_color
+        kit = self.kit
+        canvas.delete("all")
+        if not labels:
+            canvas.configure(height=1)
+            return
+        h = kit.px(22)
+        canvas.configure(height=h)
+        x = 0
+        for label in labels:
+            w = kit.f_small.measure(label) + kit.px(18)
+            fill = _rgb_hex(workspace_badge_color(label))
+            canvas.create_image(x, 0, anchor="nw",
+                                image=kit.rrect(w, h, h // 2, fill))
+            canvas.create_text(x + w / 2, h / 2, text=label, fill="#ffffff",
+                               font=kit.f_small)
+            x += w + kit.px(6)
+
+    def _build_sound(self, page):
+        kit, k, st = self.kit, self.k, self.state
+        self._header(page, "Sound",
+                     "What the buddy plays when Claude finishes or needs you.")
+        card = self._section(page)
+        ctrl, _ = self._row(card, "Sound pack",
+                            "Picking one plays a preview", stacked=True)
+        pack = k.Segmented(ctrl, kit,
+                           [(SOUND_PACK_OFF, "Off")]
+                           + [(n, n.title()) for n in SOUND_PACK_NAMES],
+                           lambda: st.sound_pack, self._set_pack)
+        pack.pack(anchor="w")
+        self.controls["sound_pack"] = pack
+        ctrl, _ = self._row(card, "Volume")
+        volume = k.Segmented(ctrl, kit,
+                             [(v, f"{int(round(v * 100))}%")
+                              for v in VOLUME_STEPS],
+                             self._volume_get, self._set_volume)
+        volume.pack()
+        self.controls["volume"] = volume
+
+        def gate():
+            volume.set_enabled(st.sound_pack != SOUND_PACK_OFF)
+        self._live(gate)
+
+        quiet = self._section(page, "Quiet hours")
+        self.controls["quiet"] = self._quiet_rows(
+            quiet, "Mute at night",
+            "No sounds between these times",
+            get_pair=lambda: (st.quiet_start, st.quiet_end),
+            apply_pair=self._set_quiet,
+            default=(22 * 60, 8 * 60))
+
+    def _build_reminders(self, page):
+        tk, p, kit, k, st = self.tk, self.p, self.kit, self.k, self.state
+        self._header(page, "Reminders", "A nudge to drink water now and then.")
+
+        hero = self._section(page)
+        row = tk.Frame(hero.body, bg=p["card"])
+        row.pack(fill="x")
+        left = tk.Frame(row, bg=p["card"])
+        left.pack(side="left", anchor="n")
+        nums = tk.Frame(left, bg=p["card"])
+        nums.pack(anchor="w")
+        cups = self._label(nums, font=kit.f_huge)
+        cups.pack(side="left")
+        cups_word = self._label(nums, fg=p["muted"])
+        cups_word.pack(side="left", anchor="s", padx=(kit.px(6), 0),
+                       pady=(0, kit.px(8)))
+        status = self._label(left, fg=p["muted"], anchor="w")
+        status.pack(anchor="w")
+        k.Button(left, kit, "I drank water", st.drink_acknowledged,
+                 kind="primary").pack(anchor="w", pady=(kit.px(12), 0))
+        k.Bars(row, kit, lambda: week_bars(st), width=196,
+               height=88).pack(side="right", anchor="s")
+
+        def refresh():
+            n = st.cups_today
+            cups.configure(text=str(n))
+            cups_word.configure(text="cup today" if n == 1
+                                else "cups today")
+            if not st.reminder_enabled:
+                s = "Reminders are off"
+            elif st.reminder_active:
+                s = "Reminding you now"
+            elif st.is_reminder_quiet_now():
+                s = "Paused for the night"
+            else:
+                s = "Next reminder " + _format_seconds(
+                    st.reminder_seconds_until_next())
+            status.configure(text=s)
+        self._live(refresh)
+
+        card = self._section(page, "Schedule")
+        ctrl, _ = self._row(card, "Remind me to drink water")
+        self.controls["reminder"] = k.Toggle(
+            ctrl, kit, lambda: st.reminder_enabled,
+            self._set_reminder_enabled)
+        self.controls["reminder"].pack()
+        ctrl, _ = self._row(card, "How often")
+        every = k.Segmented(ctrl, kit,
+                            [(s, _INTERVAL_SHORT.get(s, str(s)))
+                             for s in REMINDER_INTERVALS],
+                            lambda: st.reminder_interval,
+                            self._set_reminder_interval)
+        every.pack()
+        self.controls["interval"] = every
+        ctrl, _ = self._row(card, "Day starts at",
+                            "Reminders line up from this time")
+        anchor = k.Stepper(ctrl, kit, _HALF_HOURS,
+                           lambda: st.reminder_anchor_minute,
+                           self._set_reminder_anchor, fmt=_minutes_to_hhmm,
+                           wrap=True)
+        anchor.pack()
+        ctrl, _ = self._row(card, "Sound")
+        sound = k.Segmented(ctrl, kit,
+                            [(n, n.title()) for n in REMINDER_SOUND_CHOICES],
+                            lambda: st.reminder_sound,
+                            self._set_reminder_sound)
+        sound.pack()
+        self.controls["reminder_sound"] = sound
+        quiet = self._quiet_rows(
+            card, "Pause overnight", "No reminders between these times",
+            get_pair=lambda: (st.reminder_quiet_start, st.reminder_quiet_end),
+            apply_pair=self._set_reminder_quiet,
+            default=(23 * 60, 8 * 60))
+
+        def gate():
+            on = bool(st.reminder_enabled)
+            for w in (every, anchor, sound):
+                w.set_enabled(on)
+            quiet(on)
+        self._live(gate)
+
+    def _quiet_rows(self, card, title, sub, get_pair, apply_pair, default):
+        """A toggle row plus a from/to row for a quiet-hours window.
+        Returns a function that enables / disables the whole block."""
+        k, kit, p = self.k, self.kit, self.p
+        s0, e0 = get_pair()
+        local = {"pair": (s0, e0) if s0 is not None else default,
+                 "seen": (s0, e0), "outer": True}
+
+        def is_on():
+            return get_pair()[0] is not None
+
+        def set_on(on):
+            if on:
+                s, e = local["pair"]
+                if s == e:
+                    s, e = default
+                    local["pair"] = (s, e)
+                apply_pair(s, e)
+            else:
+                apply_pair(None, None)
+            local["seen"] = get_pair()
+
+        ctrl, _ = self._row(card, title, sub)
+        toggle = k.Toggle(ctrl, kit, is_on, set_on)
+        toggle.pack()
+        ctrl, note = self._row(card, "Hours", "")
+
+        def make(i):
+            def get():
+                return local["pair"][i]
+
+            def set_(v):
+                pair = list(local["pair"])
+                pair[i] = v
+                local["pair"] = tuple(pair)
+                s, e = local["pair"]
+                if is_on() and s != e:
+                    apply_pair(s, e)
+                    local["seen"] = get_pair()
+                note_text()
+            return get, set_
+
+        g0, s0_ = make(0)
+        g1, s1_ = make(1)
+        start = k.Stepper(ctrl, kit, _HALF_HOURS, g0, s0_,
+                          fmt=_minutes_to_hhmm, wrap=True)
+        start.pack(side="left")
+        self._label(ctrl, "to", fg=p["muted"]).pack(side="left",
+                                                     padx=kit.px(8))
+        end = k.Stepper(ctrl, kit, _HALF_HOURS, g1, s1_,
+                        fmt=_minutes_to_hhmm, wrap=True)
+        end.pack(side="left")
+
+        def note_text():
+            note.configure(text=_span_text(*local["pair"]))
+
+        def sync():
+            # Changed elsewhere (tray, config)? Follow it.
+            pair = get_pair()
+            if pair != local["seen"]:
+                local["seen"] = pair
+                if pair[0] is not None:
+                    local["pair"] = pair
+                    note_text()
+            on = is_on() and local["outer"]
+            start.set_enabled(on)
+            end.set_enabled(on)
+        note_text()
+        self._live(sync)
+
+        def enable(on):
+            local["outer"] = on
+            toggle.set_enabled(on)
+            sync()
+        enable.toggle, enable.start, enable.end = toggle, start, end
+        return enable
+
+    def _build_focus(self, page):
+        tk, p, kit, k, st = self.tk, self.p, self.kit, self.k, self.state
+        self._header(page, "Focus",
+                     "A pomodoro timer. The buddy celebrates when a round "
+                     "ends.")
+        hero = self._section(page)
+        row = tk.Frame(hero.body, bg=p["card"])
+        row.pack(fill="x")
+        d = kit.px(156)
+        ring = tk.Canvas(row, width=d, height=d, bg=p["card"],
+                         highlightthickness=0)
+        ring.pack(side="left")
+        ring_img = ring.create_image(0, 0, anchor="nw")
+        clock = ring.create_text(d / 2, d / 2 - kit.px(6), text="",
+                                 fill=p["text"], font=kit.f_big)
+        phase_t = ring.create_text(d / 2, d / 2 + kit.px(24), text="",
+                                   fill=p["muted"], font=kit.f_small)
+        right = tk.Frame(row, bg=p["card"])
+        right.pack(side="left", fill="both", expand=True,
+                   padx=(kit.px(24), 0))
+        headline = self._label(right, font=kit.f_h2, anchor="w")
+        headline.pack(fill="x", pady=(kit.px(28), 0))
+        rounds = self._label(right, fg=p["muted"], anchor="w")
+        rounds.pack(fill="x")
+        btns = tk.Frame(right, bg=p["card"])
+        btns.pack(fill="x", pady=(kit.px(14), 0))
+        start = k.Button(btns, kit, "Start", self._pomodoro_start,
+                         kind="primary", width=96)
+        start.pack(side="left")
+        stop = k.Button(btns, kit, "Stop", st.stop_pomodoro, width=80)
+        stop.pack(side="left", padx=kit.px(8))
+        self.controls["pomodoro_start"] = start
+        self.controls["pomodoro_stop"] = stop
+        green = _rgb_hex(STATUS_COLORS["celebrating"])
+        track = k.mix(p["inset"], p["faint"], 0.25)
+        self._focus = {"work": st.pomodoro_work_s // 60,
+                       "break": st.pomodoro_break_s // 60}
+
+        def refresh():
+            active = st.pomodoro_active
+            if active:
+                work = st.pomodoro_phase == "work"
+                total = st.pomodoro_work_s if work else st.pomodoro_break_s
+                left = st.pomodoro_seconds_remaining() or 0
+                frac = 1 - left / total if total else 0
+                color = p["accent"] if work else green
+                text = _format_clock(left)
+                ph = "FOCUS" if work else "BREAK"
+                head = "Focusing" if work else "On a break"
+            else:
+                frac, color = 0, p["accent"]
+                text = _format_clock(self._focus["work"] * 60)
+                ph, head = "READY", "Ready when you are"
+            img = kit.ring(d, frac, color, track, kit.px(9))
+            ring._img = img
+            ring.itemconfigure(ring_img, image=img)
+            ring.itemconfigure(clock, text=text)
+            ring.itemconfigure(phase_t, text=ph)
+            headline.configure(text=head)
+            n = st.pomodoro_cycles
+            rounds.configure(text=(f"{n} round{'s' if n != 1 else ''} done"
+                                   if active else
+                                   f"{self._focus['work']} min focus, "
+                                   f"{self._focus['break']} min break"))
+            start.set_text("Restart" if active else "Start")
+            stop.set_enabled(active)
+        self._live(refresh)
+
+        card = self._section(page, "Timer")
+        for key, title, sub in (
+                ("work", "Focus length", "Takes effect on the next start"),
+                ("break", "Break length", None)):
+            ctrl, _ = self._row(card, title, sub)
+            w = k.Stepper(ctrl, kit, _POMODORO_MINUTES,
+                          lambda key=key: self._focus[key],
+                          lambda v, key=key: self._focus.__setitem__(key, v),
+                          fmt=lambda v: f"{v} min")
+            w.pack()
+            self.controls[f"pomodoro_{key}"] = w
+
+    def _build_about(self, page):
+        import webbrowser
+        tk, p, kit, k = self.tk, self.p, self.kit, self.k
+        hero = tk.Frame(page, bg=p["bg"])
+        hero.pack(fill="x", pady=(0, kit.px(16)))
+        try:
+            from PIL import ImageTk
+            img = _make_buddy_icon_image().resize((kit.px(64), kit.px(64)))
+            self._about_icon = ImageTk.PhotoImage(img, master=self.root)
+            tk.Label(hero, image=self._about_icon, bg=p["bg"]).pack(
+                side="left", padx=(0, kit.px(16)))
+        except Exception:
+            pass
+        names = tk.Frame(hero, bg=p["bg"])
+        names.pack(side="left")
+        tk.Label(names, text="Clawd Buddy", font=kit.f_title, fg=p["text"],
+                 bg=p["bg"], anchor="w").pack(fill="x")
+        tk.Label(names, text=f"Version {APP_VERSION}", font=kit.f_body,
+                 fg=p["muted"], bg=p["bg"], anchor="w").pack(fill="x")
+        tk.Label(names, text="A tiny desktop pet that reacts to your "
+                 "coding assistant.", font=kit.f_body, fg=p["muted"],
+                 bg=p["bg"], anchor="w").pack(fill="x", pady=(kit.px(4), 0))
+
+        card = self._section(page)
+        ctrl, _ = self._row(card, "Source code", "MIT License, by Ramy Ezzat")
+        k.Button(ctrl, kit, "GitHub ↗",
+                 lambda: webbrowser.open(_REPO_URL)).pack()
+        ctrl, _ = self._row(card, "Settings file",
+                            _short_path(_config_dir()))
+
+        def open_config():
+            path = _config_dir()
+            os.makedirs(path, exist_ok=True)
+            webbrowser.open("file://" + path if os.name != "nt" else path)
+        k.Button(ctrl, kit, "Open folder", open_config).pack()
+
+        keys = self._section(page, "Shortcuts")
+        for combo, what in (
+                ("Right-click", "Open this window"),
+                ("Drag", "Move the buddy"),
+                ("Space", "Celebrate, or confirm a drink"),
+                ("Ctrl+1 … 6", "Change the size")):
+            ctrl, _ = self._row(keys, what)
+            self._keycap(ctrl, combo)
+
+    def _keycap(self, parent, text):
+        kit, p = self.kit, self.p
+        w = kit.f_small.measure(text) + kit.px(16)
+        h = kit.px(22)
+        c = self.tk.Canvas(parent, width=w, height=h, bg=p["card"],
+                           highlightthickness=0)
+        c.create_image(0, 0, anchor="nw", image=kit.rrect(
+            w, h, kit.px(6), p["inset"], p["border"], 1))
+        c.create_text(w / 2, h / 2, text=text, fill=p["text"],
+                      font=kit.f_small)
+        c.pack()
+
+    # ── Actions (apply to the buddy, then save) ──────────────────
+    def _set_size(self, preset):
+        self.state.set_scale(preset)
+        save_scale_pref(preset)
+
+    def _set_theme(self, name):
+        self.state.set_theme(name)
+        save_theme_pref(name)
+
+    def _set_reduce_motion(self, on):
+        self.state.set_reduce_motion(on)
+        save_reduce_motion_pref(on)
+
+    def _set_badges(self, on):
+        self.state.set_workspace_badge_enabled(on)
+        save_workspace_badge_pref(on)
+
+    def _startup_get(self):
+        from ..platform import startup_enabled
+        return startup_enabled()
+
+    def _startup_set(self, on):
+        from ..platform import disable_startup, enable_startup
+        try:
+            (enable_startup if on else disable_startup)()
+        except Exception as e:
+            print(f"[buddy] Start at login: {e}")
+
+    def _set_pack(self, pack):
+        self.state.set_sound_pack(pack)
+        save_sound_pack_pref(pack)
+
+    def _volume_get(self):
+        v = self.state.volume
+        return min(VOLUME_STEPS, key=lambda s: abs(s - v))
+
+    def _set_volume(self, v):
+        self.state.set_volume(v)
+        save_volume_pref(v)
+
+    def _set_quiet(self, s, e):
+        self.state.set_quiet_hours(s, e)
+        save_quiet_hours_pref(s, e)
+
+    def _set_reminder_enabled(self, on):
+        self.state.set_reminder_enabled(on)
+        save_reminder_enabled_pref(on)
+
+    def _set_reminder_interval(self, sec):
+        self.state.set_reminder_interval(sec)
+        save_reminder_interval_pref(sec)
+
+    def _set_reminder_anchor(self, minutes):
+        self.state.set_reminder_anchor_minute(minutes)
+        save_reminder_anchor_minute_pref(minutes)
+
+    def _set_reminder_sound(self, name):
+        self.state.set_reminder_sound(name)
+        save_reminder_sound_pref(name)
+        if name != REMINDER_SOUND_OFF:
+            self.state._pending_reminder_sound = name  # preview
+
+    def _set_reminder_quiet(self, s, e):
+        self.state.set_reminder_quiet_hours(s, e)
+        save_reminder_quiet_hours_pref(s, e)
+
+    def _pomodoro_start(self):
+        self.state.start_pomodoro(self._focus["work"] * 60,
+                                  self._focus["break"] * 60)

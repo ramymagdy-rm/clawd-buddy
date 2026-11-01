@@ -32,6 +32,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   800×1040 window is the largest that fits a 1080p screen under a top
   bar.
 
+- **A settings window that controls everything.** The old About dialog
+  is now a modern window with a sidebar and five pages. **Buddy** shows
+  what the buddy is doing (a chip per working workspace) and has
+  Celebrate, Bring to front, Center on screen, size, theme, reduce
+  motion, workspace badges and start at login. **Sound** has the sound
+  pack, volume, and quiet hours with any start and end time (the tray
+  only offers presets). **Reminders** shows today's cups with a bar
+  chart of recent days, plus the whole reminder schedule. **Focus** is a
+  pomodoro timer with a live countdown ring, so a cycle no longer needs
+  the command line. **About** has the version, links and shortcuts.
+  Changes apply at once and are saved, and changes from the tray or the
+  keyboard show up while it's open. It follows the desktop's light or
+  dark preference. Open it by right-clicking the buddy, from the tray
+  (**Settings & About…**, formerly **About…**), or with the new
+  `clawd-buddy --settings [PAGE]`. The `--settings` route also works on
+  desktops with no tray menu. Over HTTP the `settings` action needs
+  `--http-token`, like `quit`.
+
 ### Changed
 
 - **A new look, inspired by Codex pets.** The buddy is redrawn as a
