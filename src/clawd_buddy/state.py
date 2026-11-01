@@ -358,7 +358,11 @@ def _spawn_confetti(n):
 
 
 class BuddyState:
-    SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0}
+    # Size presets: number (Ctrl+1..6, the tray Size menu, config) →
+    # window scale. XXL's 800×1040 window is the largest that still fits
+    # a 1080p screen under a top bar.
+    SCALE_PRESETS = {1: 1.0, 2: 1.25, 3: 1.5, 4: 2.0, 5: 3.0, 6: 4.0}
+    SCALE_LABELS = {1: "S", 2: "M", 3: "L", 4: "L+", 5: "XL", 6: "XXL"}
 
     def __init__(self, theme_name="dark", sound_pack=None, clock=None,
                  reduce_motion=False, volume=1.0,
@@ -392,6 +396,7 @@ class BuddyState:
         self.theme_name = theme_name
         self.theme = dict(THEMES[theme_name])
         self.scale = 1.0
+        self.scale_preset = 1
         self._scale_changed = False
         self._raise_requested = False
         self._center_requested = False
@@ -1123,8 +1128,10 @@ class BuddyState:
             self.theme = dict(THEMES[name])
 
     def set_scale(self, preset):
-        """Set scale from preset number (1-4)."""
-        if preset in self.SCALE_PRESETS:
+        """Set scale from a preset number (see SCALE_PRESETS). The main
+        loop resizes the window on its next frame."""
+        if preset in self.SCALE_PRESETS and preset != self.scale_preset:
+            self.scale_preset = preset
             self.scale = self.SCALE_PRESETS[preset]
             self._scale_changed = True
 

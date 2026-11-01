@@ -39,7 +39,7 @@ Options:
 Controls:
   Drag             Click and drag to reposition
   Space            Test celebration
-  Ctrl+1/2/3/4     Resize: 100% / 125% / 150% / 200%
+  Ctrl+1..6        Size: S 1x / M 1.25x / L 1.5x / L+ 2x / XL 3x / XXL 4x
   Escape           Quit
 
 Switch themes from the system-tray right-click menu (Theme submenu)
@@ -182,9 +182,11 @@ def _run_buddy(args, port):
         load_saved_reminder_interval,
         load_saved_reminder_quiet_hours,
         load_saved_reminder_sound,
+        load_saved_scale_preset,
         load_saved_sound_pack,
         load_saved_volume,
         load_saved_workspace_badge,
+        save_scale_pref,
     )
     from .constants import FPS_ACTIVE, FPS_IDLE, WIN_H, WIN_W
     from .ipc import socket_listener
@@ -211,7 +213,8 @@ def _run_buddy(args, port):
     from .state import BuddyState
     from .ui.about import make_buddy_icon_surface
     from .ui.drawing import (
-        OFFSET_LIMITS, BuddyRenderer, compose_frame, frame_size_for)
+        GROUND_Y, OFFSET_LIMITS, BuddyRenderer, compose_frame,
+        frame_size_for)
     from .ui.sound import apply_volume, init_reminder_sounds, init_sounds
     from .ui.tray import create_tray
 
@@ -350,6 +353,11 @@ def _run_buddy(args, port):
     if args.test:
         state.celebrate()
 
+    # The size picked last time (tray Size menu / Ctrl+1..6). The window
+    # opens at 1x on the taskbar and the first frame resizes it around
+    # the buddy's feet.
+    state.set_scale(load_saved_scale_preset())
+
     # The window has per-pixel alpha on Linux with a compositor; there
     # the frame is supersampled and filtered down for smooth edges.
     # Otherwise (Windows colour-key, bare X11) it's an opaque frame at
@@ -404,6 +412,7 @@ def _run_buddy(args, port):
     # Only the character itself takes mouse input; clicks on the
     # transparent rest of the window reach whatever is behind it.
     applied_region = None
+    region_recheck_at = None
 
     def update_input_region():
         nonlocal applied_region
@@ -445,10 +454,17 @@ def _run_buddy(args, port):
         # Apply pending scale change
         if state._scale_changed:
             state._scale_changed = False
-            screen, handle = resize_window(handle, state.scale, topmost)
+            # Grow or shrink around the buddy's feet, so it stays put.
+            ox, oy = renderer.offset
+            feet = ((WIN_W / 2 + ox) / WIN_W, (GROUND_Y + oy) / WIN_H)
+            screen, handle = resize_window(handle, state.scale, topmost,
+                                           anchor=feet)
             frame = None
             placement.reset()
             sync_offset()
+            # The window manager may work out the clickable region
+            # against the old size; set it again once the resize lands.
+            region_recheck_at = t + 0.3
 
         # Apply pending bring-to-front request
         if state._raise_requested:
@@ -528,6 +544,8 @@ def _run_buddy(args, port):
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 running = False
+            elif ev.type == pygame.WINDOWSIZECHANGED:
+                applied_region = None   # re-send it for the new size
             elif ev.type in (pygame.WINDOWEXPOSED, pygame.VIDEOEXPOSE):
                 # Without a compositor X11 forgets uncovered pixels, so
                 # repaint the whole window, not just the dirty region.
@@ -546,12 +564,13 @@ def _run_buddy(args, port):
                         state.drink_acknowledged()
                     else:
                         state.celebrate()
-                elif ev.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
-                    # Ctrl+1..4 resizes the buddy. Theme switching is now
-                    # exclusively via the tray Theme submenu.
+                elif pygame.K_1 <= ev.key <= pygame.K_6:
+                    # Ctrl+1..6 picks a size (S … XXL), like the tray
+                    # Size menu. Theme switching is via the tray only.
                     mods = pygame.key.get_mods()
                     if mods & pygame.KMOD_CTRL:
                         state.set_scale(ev.key - pygame.K_0)
+                        save_scale_pref(ev.key - pygame.K_0)
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 # Work areas change rarely (monitors, docks); one read
                 # per drag is plenty.
@@ -587,6 +606,9 @@ def _run_buddy(args, port):
             shown = None
         elif frame_dirty is not None:
             frame.fill(bg, frame_dirty)
+        if region_recheck_at is not None and t >= region_recheck_at:
+            region_recheck_at = None
+            applied_region = None
         update_input_region()
         renderer.draw(frame, t, state, is_blink)
         frame_dirty = renderer.dirty

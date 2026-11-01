@@ -23,6 +23,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   `scripts/release_tool.py`, and the decisions it makes are tested in
   `tests/test_release_tool.py`.
 
+- **Size menu, with XL and XXL.** The tray menu has a **Size** submenu:
+  S (1×), M (1.25×), L (1.5×), L+ (2×), and the new XL (3×) and XXL
+  (4×). Before, sizes were only reachable with Ctrl+1–4 while the buddy
+  had focus; Ctrl+5 and Ctrl+6 now pick XL and XXL. The size is
+  remembered across restarts, and resizing keeps the buddy's feet where
+  they were instead of growing the window from its top-left corner. XXL's
+  800×1040 window is the largest that fits a 1080p screen under a top
+  bar.
+
 ### Changed
 
 - **A new look, inspired by Codex pets.** The buddy is redrawn as a
@@ -68,6 +77,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   above. The window manager's limits are read per monitor from
   `_GTK_WORKAREAS_D0` (or `_NET_WORKAREA`) and double-checked after each
   drag.
+- **Resizing threw the buddy into the top-left corner, where it seemed
+  stuck (Linux).** After the window existed, pygame reported the
+  *window's* size as the screen size, so every resize clamped the buddy
+  into the top-left corner of the screen, against two edges. **Center on
+  Screen** and **Bring to Front** had the same bug. The screen size now
+  comes from the desktop, the buddy stays on the monitor it's on (using
+  the window manager's work areas), and the clickable region is sent
+  again once a resize has landed, in case the window manager worked it
+  out against the old size.
 - **With several Claude Code sessions, one finishing hid the others.**
   The buddy had a single "thinking" state, so the first session to stop
   sent it back to idle while the rest were still working, and pressing
