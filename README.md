@@ -340,7 +340,7 @@ theme, so the override sticks for next time too. First-run default is `dark`.
 | **Windows 10/11** | Color-key (fully transparent background) | Win32 `HWND_TOPMOST` | Notification-area icon (pystray) | VBS in Startup folder |
 | **Linux (X11 / XWayland)** | Per-pixel alpha with a compositor (fully transparent background); themed background without one | `_NET_WM_STATE_ABOVE` | StatusNotifierItem over D-Bus (GNOME needs the AppIndicator extension, which Ubuntu enables by default) | `.desktop` in `~/.config/autostart/` |
 
-> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use the tray **Size** menu (or `Ctrl+2`…`Ctrl+7`) to enlarge it if you'd like it bigger.
+> **Windows notes:** The process declares Per-Monitor-v2 DPI awareness at startup so the buddy positions correctly regardless of display scaling (125–200% is the Windows 11 laptop default). At high scaling the buddy renders at its native pixel size (crisp, not OS-upscaled and blurry) — use the tray **Size** menu (or `Ctrl+2`…`Ctrl+7`) to enlarge it if you'd like it bigger. The buddy runs as `Clawd Buddy.exe`, so Task Manager shows it by name; see [Task Manager name](#task-manager-name-windows).
 
 > **Linux notes:** Requires an X11 session (Wayland restricts window positioning and always-on-top). Most Wayland desktops support XWayland — set `SDL_VIDEODRIVER=x11` (done automatically). Panel/dock height is auto-detected via `_NET_WORKAREA`; falls back to 48px. When a compositing manager is running (GNOME, KDE, Xfce with compositing, picom…), the window uses a 32-bit ARGB visual, so the background is truly transparent. This sets `SDL_VIDEO_X11_WINDOW_VISUALID` and `SDL_FRAMEBUFFER_ACCELERATION=0` automatically.
 
@@ -582,6 +582,7 @@ src/clawd_buddy/
 └── platform/
     ├── __init__.py # cross-platform facade
     ├── _windows.py # Win32 ctypes (transparency, taskbar, autostart)
+    ├── _winhost.py # "Clawd Buddy.exe": named copy of pythonw for Task Manager
     └── _linux.py   # X11 / XDG (window props, ARGB transparency, panel detection, .desktop)
 ```
 
@@ -735,6 +736,41 @@ Activities / the app grid.
 
 The buddy itself stays off the dock and Alt-Tab while it runs; it's a
 pet, not a window.
+
+### Task Manager name (Windows)
+
+In Task Manager the buddy shows up as **Clawd Buddy**, with its own
+icon. The Processes tab lists it as **Clawd Buddy** and the Details tab
+as **`Clawd Buddy.exe`**. Before, it was just another **Python** /
+`pythonw.exe` process.
+
+To do this, the buddy makes its own copy of Python's `pythonw.exe` the
+first time it starts. It names the copy `Clawd Buddy.exe` and gives it
+the buddy's name and icon:
+
+```text
+<the buddy's venv>\clawd-buddy-host-<hash>\Clawd Buddy.exe
+                                          python3XX.dll, python3.dll, vcruntime140*.dll
+```
+
+For a `uv tool` install, the venv is
+`%APPDATA%\uv\tools\clawd-buddy`. The copy is about 7 MB and runs
+exactly the same Python as before, from the same environment.
+
+- It's rebuilt automatically when you upgrade the buddy or Python, and
+  older copies are removed once nothing is running from them. You can
+  delete the folder at any time; it comes back on the next start.
+- Before using a new copy, the buddy checks that it starts. If the copy
+  can't be built or doesn't work (a read-only environment, the Microsoft
+  Store Python, antivirus holding the file), the buddy runs as
+  `pythonw.exe` as before, and `clawd-buddy` prints why.
+- This only works when the buddy is installed in a virtual environment
+  (uv, pipx or a venv), which is how the install instructions above
+  set it up. A plain `pip install` into your system Python keeps
+  running as `pythonw.exe`.
+- The copy isn't code-signed. If your Python came from python.org, the
+  original `pythonw.exe` is signed, but changing the name and icon
+  removes that signature from the copy.
 
 ### System tray
 

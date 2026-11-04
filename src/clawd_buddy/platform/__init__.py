@@ -306,6 +306,18 @@ def install_launcher():
         return False
 
 
+def host_executable():
+    """Windows: the `Clawd Buddy.exe` copy of the interpreter to run the
+    detached buddy with, so Task Manager shows it by name and with its
+    icon instead of as "Python" / pythonw.exe. Built on first use and
+    after upgrades. None elsewhere, outside a venv, or if it can't be
+    built — the caller then uses pythonw.exe as before."""
+    if sys.platform != "win32":
+        return None
+    from . import _winhost
+    return _winhost.ensure_host()
+
+
 def startup_supported():
     """True where run-at-login is implemented (Windows, Linux)."""
     return sys.platform in ("win32", "linux")

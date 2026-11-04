@@ -4,6 +4,27 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Task Manager shows "Clawd Buddy" (Windows).** The buddy used to
+  appear as **Python** / `pythonw.exe`, impossible to tell apart from
+  any other Python program. It now runs as **`Clawd Buddy.exe`**, with
+  the buddy's name and icon in both the Processes and Details tabs, and
+  as one process instead of two (the venv launcher is no longer in the
+  middle). On first start the buddy copies the interpreter's
+  `pythonw.exe` and the DLLs it needs into
+  `<venv>\clawd-buddy-host-<hash>\`, then rewrites the copy's version
+  resource and icon. The copy runs the same Python from the same
+  environment. It's rebuilt when the buddy or Python is upgraded, old
+  copies are removed once nothing runs from them, and a new copy must
+  import the buddy successfully before it's used. If anything fails, or
+  the buddy isn't installed in a venv, it runs as `pythonw.exe` as
+  before. The run-at-login entry is unchanged. Code:
+  `platform/_winhost.py`. Tests: `tests/test_winhost.py`, including a
+  real build checked through Windows' own version-info API.
+
 ## [0.1.25] - 2026-11-01
 
 ### Added
