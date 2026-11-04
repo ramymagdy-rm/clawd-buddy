@@ -4,7 +4,7 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.27] - 2026-11-05
 
 ### Changed
 
@@ -14,9 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   moved to focused pages in `docs/`: `features.md`, `themes.md`,
   `animations.md`, `integrations.md` (hooks, every command, the signal
   protocol, the HTTP webhook), `platforms.md` and `troubleshooting.md`.
-  The README's links and
-  image now use full GitHub URLs, so they work on the PyPI page too,
-  where the animated buddy never showed before.
+  The README's links and image now use full GitHub URLs, so they work
+  on the PyPI page too, where the animated buddy never showed before.
 
 ### Fixed
 
