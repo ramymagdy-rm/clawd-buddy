@@ -204,6 +204,7 @@ def _run_buddy(args, port):
         get_window_handle,
         get_window_rect,
         get_work_areas,
+        host_executable,
         install_launcher,
         move_window,
         prepare_window_transparency,
@@ -230,8 +231,12 @@ def _run_buddy(args, port):
     if not args.fg:
         if sys.platform == "win32":
             import subprocess
+            # Prefer "Clawd-Buddy.exe" so Task Manager names the buddy;
+            # fall back to pythonw.exe if it can't be built.
+            pythonw = host_executable()
             py_dir = os.path.dirname(sys.executable)
-            pythonw = os.path.join(py_dir, "pythonw.exe")
+            if pythonw is None:
+                pythonw = os.path.join(py_dir, "pythonw.exe")
             if not os.path.exists(pythonw):
                 pythonw = os.path.join(py_dir, "Scripts", "pythonw.exe")
             if not os.path.exists(pythonw):
@@ -250,11 +255,16 @@ def _run_buddy(args, port):
                 cmd += ["--http-port", str(args.http_port)]
             if args.http_token is not None:
                 cmd += ["--http-token", args.http_token]
+            # A venv launcher's __PYVENV_LAUNCHER__ would make the child
+            # report the launcher as sys.executable; let it see itself.
+            env = dict(os.environ)
+            env.pop("__PYVENV_LAUNCHER__", None)
             subprocess.Popen(
                 cmd,
                 creationflags=(subprocess.DETACHED_PROCESS
                                | subprocess.CREATE_NO_WINDOW),
                 close_fds=True,
+                env=env,
             )
             sys.exit(0)
         elif sys.platform == "linux":

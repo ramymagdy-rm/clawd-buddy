@@ -221,14 +221,26 @@ _WIN_LEGACY_VBS = "clawd-buddy-startup.vbs"
 
 def _win_resolve_startup_exe():
     # Prefer the GUI-subsystem launcher so no console flashes at login.
+    # Look next to the interpreter and in the venv's Scripts folder: a
+    # buddy running as "Clawd-Buddy.exe" has its interpreter in a folder
+    # of its own, so sys.executable's folder alone isn't enough.
+    # File names are case-insensitive, so in that folder "clawd-buddy.exe"
+    # *is* Clawd-Buddy.exe, the interpreter: never register that, or
+    # login would start a bare Python that does nothing.
+    def is_interpreter(path):
+        return (os.path.normcase(os.path.abspath(path))
+                == os.path.normcase(os.path.abspath(sys.executable)))
+
+    folders = [os.path.dirname(sys.executable),
+               os.path.join(sys.prefix, "Scripts")]
     for name in ("clawd-buddyw", "clawd-buddy"):
         found = shutil.which(name)
-        if found:
+        if found and not is_interpreter(found):
             return found
-        candidate = os.path.join(
-            os.path.dirname(sys.executable), f"{name}.exe")
-        if os.path.exists(candidate):
-            return candidate
+        for folder in folders:
+            candidate = os.path.join(folder, f"{name}.exe")
+            if os.path.exists(candidate) and not is_interpreter(candidate):
+                return candidate
     return "clawd-buddy"
 
 def _win_remove_legacy_vbs():
