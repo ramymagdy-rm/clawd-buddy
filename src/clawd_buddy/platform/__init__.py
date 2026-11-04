@@ -307,7 +307,7 @@ def install_launcher():
 
 
 def host_executable():
-    """Windows: the `Clawd Buddy.exe` copy of the interpreter to run the
+    """Windows: the `Clawd-Buddy.exe` copy of the interpreter to run the
     detached buddy with, so Task Manager shows it by name and with its
     icon instead of as "Python" / pythonw.exe. Built on first use and
     after upgrades. None elsewhere, outside a venv, or if it can't be

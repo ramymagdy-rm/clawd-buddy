@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Ramy Ezzat
 # Licensed under the MIT License — see LICENSE in the project root.
 
-"""Windows: run the buddy as "Clawd Buddy.exe" instead of pythonw.exe.
+"""Windows: run the buddy as "Clawd-Buddy.exe" instead of pythonw.exe.
 
 Task Manager names a process after its executable: the Processes tab
 shows the file description from the exe's version resource ("Python")
@@ -11,7 +11,7 @@ help, the buddy is indistinguishable from any other Python program.
 The fix is to give it its own executable. `ensure_host()` copies the
 base interpreter's `pythonw.exe` (plus the DLLs it loads at start-up)
 into a folder directly inside the buddy's virtual environment, names
-the copy `Clawd Buddy.exe`, and rewrites its version resource and icon
+the copy `Clawd-Buddy.exe`, and rewrites its version resource and icon
 so Task Manager shows "Clawd Buddy" with the buddy's face. Because the
 folder sits one level below the venv, the copy finds the venv's
 `pyvenv.cfg` exactly like the venv's own launcher does, so it gets the
@@ -41,10 +41,10 @@ import sys
 from .. import __version__
 
 HOST_NAME = "Clawd Buddy"
-HOST_EXE = HOST_NAME + ".exe"
+HOST_EXE = "Clawd-Buddy.exe"
 HOST_DIR_PREFIX = "clawd-buddy-host-"
 # Bump when the way a host is built changes, so existing hosts rebuild.
-HOST_FORMAT = 1
+HOST_FORMAT = 2
 
 # Resource types (winuser.h).
 RT_ICON = 3
@@ -371,7 +371,7 @@ def _build_host(folder, source_exe, dlls):
 
 
 def ensure_host():
-    """Return the path of `Clawd Buddy.exe` for this install, building
+    """Return the path of `Clawd-Buddy.exe` for this install, building
     it first if needed, or None to launch with pythonw.exe as before.
 
     Only for venv installs (uv tool, pipx, a dev venv): the host has to

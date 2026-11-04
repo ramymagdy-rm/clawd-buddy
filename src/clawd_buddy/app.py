@@ -231,7 +231,7 @@ def _run_buddy(args, port):
     if not args.fg:
         if sys.platform == "win32":
             import subprocess
-            # Prefer "Clawd Buddy.exe" so Task Manager names the buddy;
+            # Prefer "Clawd-Buddy.exe" so Task Manager names the buddy;
             # fall back to pythonw.exe if it can't be built.
             pythonw = host_executable()
             py_dir = os.path.dirname(sys.executable)

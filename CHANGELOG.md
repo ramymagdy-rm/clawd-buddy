@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **Task Manager shows "Clawd Buddy" (Windows).** The buddy used to
   appear as **Python** / `pythonw.exe`, impossible to tell apart from
-  any other Python program. It now runs as **`Clawd Buddy.exe`**, with
+  any other Python program. It now runs as **`Clawd-Buddy.exe`**, with
   the buddy's name and icon in both the Processes and Details tabs, and
   as one process instead of two (the venv launcher is no longer in the
   middle). On first start the buddy copies the interpreter's

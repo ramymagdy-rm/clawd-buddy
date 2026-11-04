@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Ramy Ezzat
 # Licensed under the MIT License — see LICENSE in the project root.
 
-"""Tests for the Windows "Clawd Buddy.exe" host (platform/_winhost.py).
+"""Tests for the Windows "Clawd-Buddy.exe" host (platform/_winhost.py).
 
 The resource builders are pure and checked on every OS by parsing their
 output back. The decision logic in `ensure_host` (when to build, reuse,
@@ -106,7 +106,7 @@ class TestVersionResource:
     def test_task_manager_name(self):
         _lang, strings = strings_of(self.blob)
         assert strings["FileDescription"] == "Clawd Buddy"
-        assert strings["OriginalFilename"] == "Clawd Buddy.exe"
+        assert strings["OriginalFilename"] == "Clawd-Buddy.exe"
 
     def test_translation_matches_the_table(self):
         _k, _v, children, _e = parse_node(self.blob)
@@ -331,6 +331,36 @@ class TestStartupExeFromHost:
         assert _windows._win_resolve_startup_exe() == \
             str(scripts / "clawd-buddyw.exe")
 
+    def test_never_registers_the_interpreter(self, tmp_path, monkeypatch):
+        # "clawd-buddy.exe" in the host folder is Clawd-Buddy.exe (names
+        # are case-insensitive), i.e. Python itself. With no launcher on
+        # PATH or in Scripts, the bare name is the only safe answer.
+        from clawd_buddy.platform import _windows
+        host = tmp_path / "venv" / "clawd-buddy-host-x"
+        host.mkdir(parents=True)
+        (host / wh.HOST_EXE).write_bytes(b"MZ")
+        monkeypatch.setattr(_windows.shutil, "which", lambda _n: None)
+        monkeypatch.setattr(sys, "executable", str(host / wh.HOST_EXE))
+        monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+        assert _windows._win_resolve_startup_exe() == "clawd-buddy"
+
+    def test_ignores_the_interpreter_on_path(self, tmp_path, monkeypatch):
+        from clawd_buddy.platform import _windows
+        host = tmp_path / "venv" / "clawd-buddy-host-x"
+        host.mkdir(parents=True)
+        exe = host / wh.HOST_EXE
+        exe.write_bytes(b"MZ")
+        scripts = tmp_path / "venv" / "Scripts"
+        scripts.mkdir()
+        (scripts / "clawd-buddyw.exe").write_bytes(b"MZ")
+        monkeypatch.setattr(_windows.shutil, "which",
+                            lambda n: str(host / "clawd-buddy.exe")
+                            if n == "clawd-buddy" else None)
+        monkeypatch.setattr(sys, "executable", str(exe))
+        monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+        assert _windows._win_resolve_startup_exe() == \
+            str(scripts / "clawd-buddyw.exe")
+
 
 # ── A real build (Windows, from a venv) ──────────────────────────────
 def _version_string(path, name):
@@ -369,7 +399,7 @@ class TestRealBuild:
 
         exe = wh.ensure_host()
         assert exe and os.path.exists(exe)
-        assert os.path.basename(exe) == "Clawd Buddy.exe"
+        assert os.path.basename(exe) == "Clawd-Buddy.exe"
         assert _version_string(exe, "FileDescription") == "Clawd Buddy"
         assert _version_string(exe, "ProductName") == "Clawd Buddy"
 
