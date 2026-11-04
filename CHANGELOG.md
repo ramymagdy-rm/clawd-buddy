@@ -4,6 +4,34 @@ All notable changes to Clawd Buddy will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **A shorter README, with the details in `docs/`.** The README went from
+  about 1,000 lines to a one-page overview: what the buddy does, install,
+  a three-step quick start, everyday controls and links. Everything else
+  moved to focused pages in `docs/`: `features.md`, `themes.md`,
+  `animations.md`, `integrations.md` (hooks, every command, the signal
+  protocol, the HTTP webhook), `platforms.md` and `troubleshooting.md`.
+  The README's links and
+  image now use full GitHub URLs, so they work on the PyPI page too,
+  where the animated buddy never showed before.
+
+### Fixed
+
+- **The hooks example used an 83-minute timeout.** Claude Code hook
+  timeouts are in seconds, so the documented `"timeout": 5000` let a
+  stuck hook hold a session for well over an hour; the docs now use 5.
+- **Docs described run-at-login as a Startup-folder script.** On Windows
+  it has been a registry Run entry pointing at `clawd-buddyw.exe` for
+  several releases; Platforms and Troubleshooting now say so, with the
+  `reg query` to check it.
+- **Other stale docs:** the command reference listed 8 themes instead of
+  38, the controls table was cut in two, and the module layout in
+  `CONTRIBUTING.md` predated the settings window, the webhook and the
+  Windows host.
+
 ## [0.1.26] - 2026-11-04
 
 ### Added

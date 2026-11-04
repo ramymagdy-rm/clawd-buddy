@@ -365,5 +365,5 @@ def _pick_icon_class(pystray):
             print("[buddy] Tray: StatusNotifierItem (D-Bus menu)")
             return sni.SniIcon
         print("[buddy] Tray: no StatusNotifierItem host found — the tray "
-              "icon has no menu (see README: Linux tray menu)")
+              "icon has no menu (see docs/troubleshooting.md)")
     return pystray.Icon
