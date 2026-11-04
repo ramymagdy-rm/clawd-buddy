@@ -69,35 +69,51 @@ Use `--fg` to keep the buddy in the foreground so you can see log output in the 
 clawd-buddy/
 ├── src/clawd_buddy/
 │   ├── __init__.py        # Package metadata (__version__)
-│   ├── app.py             # main() orchestration only
+│   ├── app.py             # main() orchestration
 │   ├── constants.py       # Window dimensions, IPC port, transparency key
-│   ├── state.py           # BuddyState state machine + queue + modes
-│   ├── cli.py             # argparse + read_hook_stdin
-│   ├── config.py          # ~/.config/clawd-buddy persistence
+│   ├── state.py           # BuddyState: animation state machine + queue
+│   ├── cli.py             # argparse + Claude Code hook stdin reader
+│   ├── config.py          # config.json persistence (platform config dir)
+│   ├── history.py         # ~/.clawd-buddy/history.json drinking history
 │   ├── ipc.py             # JSON-over-TCP protocol + dispatcher + client
-│   ├── placement.py       # Drag placement: window vs. character offset
+│   ├── placement.py       # Dragging past the work-area edge (character offset)
+│   ├── webhook.py         # HTTP transport over the same dispatcher (--http-port)
 │   ├── ui/
-│   │   ├── themes.py      # 8 color theme registry
-│   │   ├── sound.py       # Procedural PCM generators + pack registry
-│   │   ├── drawing.py     # BuddyRenderer (character, pill, bubble) + compose_frame
-│   │   ├── about.py       # About dialog + shared buddy icon
+│   │   ├── themes.py      # Theme colours + character costumes (38 themes)
+│   │   ├── sound.py       # Procedural PCM sound-pack generators
+│   │   ├── drawing.py     # BuddyRenderer: buddy, status pill, bubble, confetti
+│   │   ├── about.py       # Settings & About window + shared buddy icon
+│   │   ├── tkkit.py       # Antialiased tkinter widgets for that window
 │   │   ├── tray.py        # pystray icon + right-click menu
 │   │   └── sni.py         # Linux tray backend (StatusNotifierItem + DBusMenu)
 │   └── platform/
 │       ├── __init__.py    # Cross-platform facade
 │       ├── _windows.py    # Win32 ctypes (transparency, taskbar, autostart)
+│       ├── _winhost.py    # Clawd-Buddy.exe: named copy of pythonw for Task Manager
 │       └── _linux.py      # X11 / XDG (window props, ARGB transparency, panel, .desktop)
 ├── tests/                 # One test file per module
+├── docs/                  # User docs linked from the README
 ├── .claude/
 │   ├── settings.json      # Claude Code hook definitions
-│   └── commands/
-│       └── buddy.md       # /buddy slash command for Claude Code
+│   ├── commands/buddy.md  # /buddy slash command for Claude Code
+│   └── skills/release/    # /release: the release flow below, automated
 ├── pyproject.toml         # Package configuration
-├── README.md
+├── README.md              # Short overview; details live in docs/
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 └── LICENSE
 ```
+
+How a signal flows: a Claude Code hook runs `clawd-buddy --send` (or
+`--wave`, `--prompt-start`), which connects to `127.0.0.1:44556`, sends
+one JSON action and exits. The running buddy's `ipc.socket_listener`
+thread hands it to `dispatch_action`, which calls the matching
+`BuddyState` method; the main loop then animates the new state. The
+protocol is documented in [docs/integrations.md](docs/integrations.md).
+
+User-facing documentation lives in `docs/`. The README stays a short
+overview: put new feature details in the matching `docs/` page and link
+to it, rather than growing the README.
 
 ## How the code is organized
 
